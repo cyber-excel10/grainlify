@@ -3,7 +3,7 @@
 extern crate std;
 use super::*;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{testutils::Events, TryFromVal, token, vec, Address, Env, String, Symbol};
+use soroban_sdk::{token, vec, Address, Env, String};
 
 /// Sets up a test environment with contract, token, admin, and program_admin.
 /// Expands variables directly into the calling scope to avoid lifetime issues.
@@ -29,25 +29,6 @@ macro_rules! setup {
         $token_admin.mint(&$program_admin, &$initial_balance);
     };
 }
-
-
-fn has_event_topic(env: &Env, topic_name: &str) -> bool {
-    use soroban_sdk::IntoVal;
-    let expected: soroban_sdk::Val = Symbol::new(env, topic_name).into_val(env);
-    let events = env.events().all();
-    std::println!("Events len: {}", events.len());
-    for (_contract, topics, _data) in events.iter() {
-        if topics.len() > 0 {
-            let first = topics.get(0).unwrap();
-            std::println!("Topic 0: {:?}, expected: {:?}", first, expected);
-            if first.get_payload() == expected.get_payload() {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 // ==================== SINGLE REGISTRATION ====================
 
 #[test]
@@ -940,6 +921,44 @@ fn test_register_program_juris_config() {
 }
 
 #[test]
+fn test_register_prog_w_juris_alias_builds_config_from_raw_fields() {
+    setup!(
+        env,
+        client,
+        contract_id,
+        admin,
+        program_admin,
+        token_client,
+        token_admin,
+        25_000i128
+    );
+
+    client.register_prog_w_juris(
+        &191,
+        &program_admin,
+        &String::from_str(&env, "Alias Program"),
+        &5_000,
+        &Some(String::from_str(&env, "LATAM")),
+        &true,
+        &Some(6_000),
+        &false,
+        &OptionalJurisdiction::None,
+        &Some(true),
+    );
+
+    let program = client.get_program(&191);
+    let expected = ProgramJurisdictionConfig {
+        tag: Some(String::from_str(&env, "LATAM")),
+        requires_kyc: true,
+        max_funding: Some(6_000),
+        registration_paused: false,
+    };
+    assert_eq!(program.jurisdiction, OptionalJurisdiction::Some(expected.clone()));
+    assert_eq!(client.get_program_jurisdiction(&191), Some(expected));
+    assert_eq!(token_client.balance(&contract_id), 5_000);
+}
+
+#[test]
 fn test_register_program_juris_requires_kyc_attestation() {
     setup!(
         env,
@@ -1102,4 +1121,110 @@ fn test_batch_register_juris() {
     let eu = client.get_program(&96);
     assert_eq!(eu.jurisdiction, OptionalJurisdiction::Some(eu_cfg.clone()));
     assert_eq!(client.get_program_jurisdiction(&96), Some(eu_cfg));
+}
+
+#[test]
+fn test_batch_reg_progs_w_juris_alias_builds_config_from_raw_fields() {
+    setup!(
+        env,
+        client,
+        contract_id,
+        admin,
+        program_admin,
+        token_client,
+        token_admin,
+        40_000i128
+    );
+
+    let items = vec![
+        &env,
+        ProgramRegistrationWithJurisdictionItem {
+            program_id: 195,
+            admin: program_admin.clone(),
+            name: String::from_str(&env, "Alias Batch Program"),
+            total_funding: 5_000,
+            juris_tag: Some(String::from_str(&env, "APAC")),
+            juris_requires_kyc: true,
+            juris_max_funding: Some(8_000),
+            juris_registration_paused: false,
+            jurisdiction: OptionalJurisdiction::None,
+            kyc_attested: Some(true),
+        },
+    ];
+
+    let count = client.batch_reg_progs_w_juris(&items);
+    assert_eq!(count, 1);
+
+    let expected = ProgramJurisdictionConfig {
+        tag: Some(String::from_str(&env, "APAC")),
+        requires_kyc: true,
+        max_funding: Some(8_000),
+        registration_paused: false,
+    };
+    let program = client.get_program(&195);
+    assert_eq!(program.jurisdiction, OptionalJurisdiction::Some(expected.clone()));
+    assert_eq!(client.get_program_jurisdiction(&195), Some(expected));
+    assert_eq!(token_client.balance(&contract_id), 5_000);
+}
+
+#[test]
+fn test_deprecation_status_defaults_and_updates() {
+    setup!(
+        env,
+        client,
+        _contract_id,
+        admin,
+        _program_admin,
+        _token_client,
+        _token_admin,
+        0i128
+    );
+
+    let initial = client.get_deprecation_status();
+    assert!(!initial.deprecated);
+    assert_eq!(initial.migration_target, None);
+
+    let migration_target = Address::generate(&env);
+    client.set_deprecated(&true, &Some(migration_target.clone()));
+
+    let updated = client.get_deprecation_status();
+    assert!(updated.deprecated);
+    assert_eq!(updated.migration_target, Some(migration_target));
+}
+
+#[test]
+fn test_deprecated_contract_blocks_registration_paths() {
+    setup!(
+        env,
+        client,
+        _contract_id,
+        _admin,
+        program_admin,
+        _token_client,
+        token_admin,
+        20_000i128
+    );
+
+    client.set_deprecated(&true, &None);
+    token_admin.mint(&program_admin, &20_000);
+
+    let single = client.try_register_program(
+        &201,
+        &program_admin,
+        &String::from_str(&env, "Blocked Program"),
+        &5_000,
+    );
+    assert!(single.is_err());
+
+    let batch = vec![
+        &env,
+        ProgramRegistrationItem {
+            program_id: 202,
+            admin: program_admin.clone(),
+            name: String::from_str(&env, "Blocked Batch"),
+            total_funding: 5_000,
+        },
+    ];
+    let batch_res = client.try_batch_register_programs(&batch);
+    assert!(batch_res.is_err());
 }

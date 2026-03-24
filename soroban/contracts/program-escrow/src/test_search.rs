@@ -160,6 +160,46 @@ fn test_search_filter_by_status() {
     assert_eq!(page.records.len(), 0);
 }
 
+#[test]
+fn test_search_filter_by_status_and_admin_together() {
+    setup_search!(
+        env, client, _contract_id, _admin, program_admin,
+        _token_client, token_admin, 100_000i128
+    );
+
+    let other_admin = Address::generate(&env);
+    token_admin.mint(&other_admin, &100_000);
+
+    client.register_program(
+        &1,
+        &program_admin,
+        &String::from_str(&env, "Mine Active A"),
+        &1_000,
+    );
+    client.register_program(
+        &2,
+        &other_admin,
+        &String::from_str(&env, "Other Active"),
+        &1_000,
+    );
+    client.register_program(
+        &3,
+        &program_admin,
+        &String::from_str(&env, "Mine Active B"),
+        &1_000,
+    );
+
+    let criteria = ProgramSearchCriteria {
+        status_filter: 1,
+        admin: Some(program_admin.clone()),
+    };
+
+    let page = client.get_programs(&criteria, &None, &10);
+    assert_eq!(page.records.len(), 2);
+    assert_eq!(page.records.get(0).unwrap().program_id, 1);
+    assert_eq!(page.records.get(1).unwrap().program_id, 3);
+}
+
 // ==================== FILTER BY ADMIN ====================
 
 #[test]
@@ -393,4 +433,44 @@ fn test_search_batch_registered_programs() {
     assert_eq!(page.records.get(1).unwrap().program_id, 20);
     assert_eq!(page.records.get(2).unwrap().program_id, 30);
     assert_eq!(client.get_program_count(), 3);
+}
+
+#[test]
+fn test_search_includes_jurisdiction_enabled_programs() {
+    setup_search!(
+        env, client, _contract_id, _admin, program_admin,
+        _token_client, _token_admin, 100_000i128
+    );
+
+    let jurisdiction = ProgramJurisdictionConfig {
+        tag: Some(String::from_str(&env, "EU-only")),
+        requires_kyc: true,
+        max_funding: Some(10_000),
+        registration_paused: false,
+    };
+
+    client.register_program_juris(
+        &10,
+        &program_admin,
+        &String::from_str(&env, "Jurisdiction Program"),
+        &5_000,
+        &jurisdiction.tag.clone(),
+        &jurisdiction.requires_kyc,
+        &jurisdiction.max_funding.clone(),
+        &jurisdiction.registration_paused,
+        &OptionalJurisdiction::Some(jurisdiction.clone()),
+        &Some(true),
+    );
+
+    let criteria = ProgramSearchCriteria {
+        status_filter: 1,
+        admin: Some(program_admin.clone()),
+    };
+
+    let page = client.get_programs(&criteria, &None, &10);
+    assert_eq!(page.records.len(), 1);
+    let record = page.records.get(0).unwrap();
+    assert_eq!(record.program_id, 10);
+    assert_eq!(record.name, String::from_str(&env, "Jurisdiction Program"));
+    assert_eq!(client.get_program_jurisdiction(&10), Some(jurisdiction));
 }
