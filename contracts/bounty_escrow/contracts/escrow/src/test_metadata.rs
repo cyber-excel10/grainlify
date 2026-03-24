@@ -1,6 +1,4 @@
-use crate::{
-    BountyEscrowContract, BountyEscrowContractClient, NOTIFY_ON_LOCK, NOTIFY_ON_RELEASE,
-};
+use crate::{BountyEscrowContract, BountyEscrowContractClient, NOTIFY_ON_LOCK, NOTIFY_ON_RELEASE};
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
     token, Address, Env, IntoVal, String, Symbol, TryIntoVal,
@@ -79,8 +77,7 @@ fn test_notification_preferences_set_and_event() {
     let topic_0: Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(topic_0, Symbol::new(&env, "npref"));
 
-    let data: crate::events::NotificationPreferencesUpdated =
-        emitted.2.try_into_val(&env).unwrap();
+    let data: crate::events::NotificationPreferencesUpdated = emitted.2.try_into_val(&env).unwrap();
     assert_eq!(data.bounty_id, bounty_id);
     assert_eq!(data.previous_prefs, 0);
     assert_eq!(data.new_prefs, prefs);

@@ -312,10 +312,7 @@ pub struct NotificationPreferencesUpdated {
     pub timestamp: u64,
 }
 
-pub fn emit_notification_preferences_updated(
-    env: &Env,
-    event: NotificationPreferencesUpdated,
-) {
+pub fn emit_notification_preferences_updated(env: &Env, event: NotificationPreferencesUpdated) {
     let topics = (symbol_short!("npref"), event.bounty_id);
     env.events().publish(topics, event);
 }

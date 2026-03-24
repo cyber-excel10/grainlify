@@ -28,10 +28,10 @@ use events::{
     emit_batch_funds_locked, emit_batch_funds_released, emit_bounty_initialized,
     emit_deprecation_state_changed, emit_deterministic_selection, emit_funds_locked,
     emit_funds_locked_anon, emit_funds_refunded, emit_funds_released,
-    emit_maintenance_mode_changed, emit_participant_filter_mode_changed, emit_risk_flags_updated,
-    emit_notification_preferences_updated, emit_ticket_claimed, emit_ticket_issued,
-    BatchFundsLocked, BatchFundsReleased, BountyEscrowInitialized, ClaimCancelled, ClaimCreated,
-    ClaimExecuted, CriticalOperationOutcome, DeprecationStateChanged,
+    emit_maintenance_mode_changed, emit_notification_preferences_updated,
+    emit_participant_filter_mode_changed, emit_risk_flags_updated, emit_ticket_claimed,
+    emit_ticket_issued, BatchFundsLocked, BatchFundsReleased, BountyEscrowInitialized,
+    ClaimCancelled, ClaimCreated, ClaimExecuted, CriticalOperationOutcome, DeprecationStateChanged,
     DeterministicSelectionDerived, FundsLocked, FundsLockedAnon, FundsRefunded, FundsReleased,
     MaintenanceModeChanged, NotificationPreferencesUpdated, ParticipantFilterModeChanged,
     RiskFlagsUpdated, TicketClaimed, TicketIssued, EVENT_VERSION_V2,
@@ -4980,10 +4980,9 @@ mod escrow_status_transition_tests {
         let amount = 1000;
         setup.setup_escrow_in_state(EscrowStatus::Released, bounty_id, amount);
         let deadline = setup.env.ledger().timestamp() + 1000;
-        let result =
-            setup
-                .client
-                .try_lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+        let result = setup
+            .client
+            .try_lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
         assert!(
             result.is_err(),
             "Expected locking an already released bounty to fail"
