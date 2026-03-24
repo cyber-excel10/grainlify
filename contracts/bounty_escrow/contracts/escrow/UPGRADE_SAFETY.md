@@ -18,6 +18,17 @@ Before any upgrade, the following invariants are validated:
 - Verifies the contract has been initialized
 - Ensures new code can read existing storage keys
 - Checks that storage structure is compatible
+- Validates `EscrowIndex` entries resolve to exactly one variant:
+  - `DataKey::Escrow(bounty_id)` (legacy storage), or
+  - `DataKey::EscrowAnon(bounty_id)` (extension storage)
+- Fails on dangling index entries or dual-variant collisions for the same `bounty_id`
+
+#### Storage Extension Checklist (Backward-Compatibility)
+- Additive keys only: never remove or repurpose existing keys used by older clients.
+- New keys must be optional-by-default (safe when absent).
+- Legacy read paths must continue to work for old data (`Escrow` records remain valid).
+- Extension records (`EscrowAnon`) must not coexist with legacy records for the same `bounty_id`.
+- Index integrity must hold across versions: every indexed id maps to one concrete escrow record.
 
 ### 2. Contract Initialization State (Code: 1002)
 - Validates admin address is set

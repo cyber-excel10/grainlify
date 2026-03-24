@@ -22,30 +22,42 @@
 use crate::{Error, Escrow, EscrowStatus};
 use soroban_sdk::{contracttype, Env, String, Vec};
 
-/// Result of upgrade safety validation
+/// Result of pre-upgrade validation.
+///
+/// This report is returned by [`simulate_upgrade`] and is intended for
+/// admin/operator review before calling the actual upgrade entrypoint.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct UpgradeSafetyReport {
+    /// `true` when no blocking safety errors were found.
     pub is_safe: bool,
+    /// Number of checklist checks that completed successfully.
     pub checks_passed: u32,
+    /// Number of checklist checks that failed.
     pub checks_failed: u32,
+    /// Non-blocking concerns that should be reviewed by operators.
     pub warnings: Vec<UpgradeWarning>,
+    /// Blocking safety findings that must be resolved before upgrade.
     pub errors: Vec<UpgradeError>,
 }
 
-/// Warning during upgrade safety check
+/// Non-blocking upgrade-safety warning.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct UpgradeWarning {
+    /// Stable warning code for machine-readable handling.
     pub code: u32,
+    /// Human-readable warning message.
     pub message: String,
 }
 
-/// Error during upgrade safety check
+/// Blocking upgrade-safety error.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct UpgradeError {
+    /// Stable error code for machine-readable handling.
     pub code: u32,
+    /// Human-readable error message.
     pub message: String,
 }
 
@@ -79,14 +91,19 @@ pub mod safety_codes {
     pub const BALANCE_SANITY: u32 = 1010;
 }
 
-/// Enable or disable upgrade safety checks
+/// Enables or disables upgrade safety checks.
+///
+/// # Notes
+/// - Safety checks are enabled by default.
+/// - Disabling checks bypasses [`validate_upgrade`] protections and should be
+///   used only for emergency/manual recovery procedures.
 pub fn set_safety_checks_enabled(env: &Env, enabled: bool) {
     env.storage()
         .instance()
         .set(&UPGRADE_SAFETY_ENABLED, &enabled);
 }
 
-/// Check if safety checks are enabled
+/// Returns whether upgrade safety checks are currently enabled.
 pub fn is_safety_checks_enabled(env: &Env) -> bool {
     env.storage()
         .instance()
@@ -94,13 +111,13 @@ pub fn is_safety_checks_enabled(env: &Env) -> bool {
         .unwrap_or(true) // Safety checks enabled by default
 }
 
-/// Record last safety check timestamp
+/// Records the current ledger timestamp as the most recent safety-check run.
 pub fn record_safety_check(env: &Env) {
     let timestamp = env.ledger().timestamp();
     env.storage().instance().set(&LAST_SAFETY_CHECK, &timestamp);
 }
 
-/// Get last safety check timestamp
+/// Returns the timestamp of the last recorded safety-check run, if any.
 pub fn get_last_safety_check(env: &Env) -> Option<u64> {
     env.storage().instance().get(&LAST_SAFETY_CHECK)
 }
@@ -108,7 +125,9 @@ pub fn get_last_safety_check(env: &Env) -> Option<u64> {
 /// Simulate an upgrade by performing all safety checks without mutating state.
 /// This is a read-only dry-run that validates upgrade safety.
 ///
-/// Returns an UpgradeSafetyReport with detailed results of all checks.
+/// # Returns
+/// Detailed [`UpgradeSafetyReport`] containing both blocking errors and
+/// non-blocking warnings.
 pub fn simulate_upgrade(env: &Env) -> UpgradeSafetyReport {
     let mut warnings: Vec<UpgradeWarning> = Vec::new(env);
     let mut errors: Vec<UpgradeError> = Vec::new(env);
@@ -116,7 +135,8 @@ pub fn simulate_upgrade(env: &Env) -> UpgradeSafetyReport {
     let mut checks_failed: u32 = 0;
 
     // Check 1: Storage Layout Compatibility
-    if check_storage_layout_compatibility(env) {
+    let (storage_ok, storage_warnings) = check_storage_layout_compatibility(env);
+    if storage_ok {
         checks_passed += 1;
     } else {
         checks_failed += 1;
@@ -127,6 +147,9 @@ pub fn simulate_upgrade(env: &Env) -> UpgradeSafetyReport {
                 "Storage layout incompatible with current state",
             ),
         });
+    }
+    for w in storage_warnings {
+        warnings.push_back(w);
     }
 
     // Check 2: Contract Initialization
@@ -250,13 +273,64 @@ pub fn simulate_upgrade(env: &Env) -> UpgradeSafetyReport {
 
 // Private check functions
 
-fn check_storage_layout_compatibility(env: &Env) -> bool {
-    // In Soroban, storage layout compatibility is primarily ensured by:
-    // 1. Not removing existing storage keys
-    // 2. Not changing the type of existing storage keys
-    // This check verifies the contract has been initialized (meaning storage exists)
-    // and that we can read from it - which implies layout compatibility for reading
-    env.storage().instance().has(&crate::DataKey::Admin)
+fn check_storage_layout_compatibility(env: &Env) -> (bool, Vec<UpgradeWarning>) {
+    let mut warnings: Vec<UpgradeWarning> = Vec::new(env);
+
+    // Baseline keys expected by all client generations.
+    if !env.storage().instance().has(&crate::DataKey::Admin) {
+        return (false, warnings);
+    }
+    if !env.storage().instance().has(&crate::DataKey::Token) {
+        return (false, warnings);
+    }
+
+    // EscrowIndex is persistent; verify entries are resolvable against either
+    // legacy Escrow or extension EscrowAnon, but never both for the same id.
+    let ids: soroban_sdk::Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&crate::DataKey::EscrowIndex)
+        .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+
+    let sample_len = ids.len().min(100);
+    for idx in 0..sample_len {
+        let bounty_id = ids.get(idx).unwrap();
+        let has_standard = env
+            .storage()
+            .persistent()
+            .has(&crate::DataKey::Escrow(bounty_id));
+        let has_anonymous = env
+            .storage()
+            .persistent()
+            .has(&crate::DataKey::EscrowAnon(bounty_id));
+
+        if has_standard && has_anonymous {
+            return (false, warnings);
+        }
+        if !has_standard && !has_anonymous {
+            return (false, warnings);
+        }
+    }
+
+    // Optional extension key: claim window may be absent for legacy deployments.
+    if env.storage().instance().has(&crate::DataKey::ClaimWindow) {
+        let claim_window: u64 = env
+            .storage()
+            .instance()
+            .get(&crate::DataKey::ClaimWindow)
+            .unwrap_or(0);
+        if claim_window > 31_536_000 * 10 {
+            warnings.push_back(UpgradeWarning {
+                code: safety_codes::STORAGE_LAYOUT,
+                message: soroban_sdk::String::from_str(
+                    env,
+                    "Claim window unusually large; review storage extension settings",
+                ),
+            });
+        }
+    }
+
+    (true, warnings)
 }
 
 fn check_initialization(env: &Env) -> bool {
@@ -272,7 +346,7 @@ fn check_escrow_states(env: &Env) -> (bool, Vec<UpgradeWarning>) {
     // DataKey::EscrowIndex holds a Vec<u64> of every registered bounty_id.
     let ids: soroban_sdk::Vec<u64> = env
         .storage()
-        .instance()
+        .persistent()
         .get(&crate::DataKey::EscrowIndex)
         .unwrap_or_else(|| soroban_sdk::Vec::new(env));
 
@@ -340,7 +414,7 @@ fn check_pending_claims(env: &Env) -> bool {
     // Retrieve the full bounty index from instance storage.
     let ids: soroban_sdk::Vec<u64> = env
         .storage()
-        .instance()
+        .persistent()
         .get(&crate::DataKey::EscrowIndex)
         .unwrap_or_else(|| soroban_sdk::Vec::new(env));
 
@@ -363,6 +437,9 @@ fn check_pending_claims(env: &Env) -> bool {
                 if escrow.status != EscrowStatus::Locked {
                     return false;
                 }
+            } else {
+                // Orphan pending claim with no underlying escrow.
+                return false;
             }
         }
     }
@@ -435,11 +512,11 @@ fn check_version_compatibility(_env: &Env) -> bool {
 }
 
 fn check_balance_sanity(env: &Env) -> (bool, Vec<UpgradeWarning>) {
-    let mut warnings: Vec<UpgradeWarning> = Vec::new(env);
+    let warnings: Vec<UpgradeWarning> = Vec::new(env);
 
     let ids: soroban_sdk::Vec<u64> = env
         .storage()
-        .instance()
+        .persistent()
         .get(&crate::DataKey::EscrowIndex)
         .unwrap_or_else(|| soroban_sdk::Vec::new(env));
 
@@ -472,8 +549,11 @@ fn check_balance_sanity(env: &Env) -> (bool, Vec<UpgradeWarning>) {
     (true, warnings)
 }
 
-/// Validate upgrade prerequisites before executing upgrade.
-/// Returns Ok(()) if upgrade can proceed, Err(Error) otherwise.
+/// Validates upgrade prerequisites before executing upgrade.
+///
+/// # Errors
+/// Returns `Error::UpgradeSafetyCheckFailed` when blocking safety findings
+/// are detected and checks are enabled.
 pub fn validate_upgrade(env: &Env) -> Result<(), Error> {
     // Check if safety checks are enabled
     if !is_safety_checks_enabled(env) {
