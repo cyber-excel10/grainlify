@@ -468,6 +468,7 @@ pub enum DataKey {
     MaintenanceMode,                 // bool flag
     ProgramDependencies(String),     // program_id -> Vec<String>
     DependencyStatus(String),        // program_id -> DependencyStatus
+    SplitConfig(String),             // program_id -> SplitConfig (payout splits)
     Dispute,                         // DisputeRecord (single active dispute per contract)
 }
 
@@ -685,12 +686,14 @@ mod test_circuit_breaker_audit;
 #[cfg(test)]
 mod error_recovery_tests;
 
+mod payout_splits;
 #[cfg(any())]
 mod reentrancy_tests;
 #[cfg(test)]
 mod test_dispute_resolution;
 mod threshold_monitor;
 mod token_math;
+pub use payout_splits::{BeneficiarySplit, SplitConfig, SplitPayoutResult};
 
 #[cfg(test)]
 mod reentrancy_guard_standalone_test;
@@ -713,6 +716,9 @@ mod test_risk_flags;
 #[cfg(test)]
 #[cfg(test)]
 mod test_serialization_compatibility;
+
+#[cfg(test)]
+mod test_payout_splits;
 
 // ========================================================================
 // Contract Implementation
@@ -1072,11 +1078,7 @@ impl ProgramEscrowContract {
             panic!("Amount must be greater than zero");
         }
 
-        let mut program_data: ProgramData = env
-            .storage()
-            .instance()
-            .get(&PROGRAM_DATA)
-            .unwrap();
+        let mut program_data: ProgramData = env.storage().instance().get(&PROGRAM_DATA).unwrap();
 
         // Update balances
         program_data.total_funds += amount;
@@ -1555,14 +1557,14 @@ impl ProgramEscrowContract {
         reentrancy_guard::set_entered(&env);
 
         // 2. Contract must be initialized
-        let program_data: ProgramData = env
-            .storage()
-            .instance()
-            .get(&PROGRAM_DATA)
-            .unwrap_or_else(|| {
-                reentrancy_guard::clear_entered(&env);
-                panic!("Program not initialized")
-            });
+        let program_data: ProgramData =
+            env.storage()
+                .instance()
+                .get(&PROGRAM_DATA)
+                .unwrap_or_else(|| {
+                    reentrancy_guard::clear_entered(&env);
+                    panic!("Program not initialized")
+                });
 
         // 3. Operational state: paused
         if Self::check_paused(&env, symbol_short!("release")) {
@@ -1704,14 +1706,14 @@ impl ProgramEscrowContract {
         reentrancy_guard::set_entered(&env);
 
         // 2. Contract must be initialized
-        let program_data: ProgramData = env
-            .storage()
-            .instance()
-            .get(&PROGRAM_DATA)
-            .unwrap_or_else(|| {
-                reentrancy_guard::clear_entered(&env);
-                panic!("Program not initialized")
-            });
+        let program_data: ProgramData =
+            env.storage()
+                .instance()
+                .get(&PROGRAM_DATA)
+                .unwrap_or_else(|| {
+                    reentrancy_guard::clear_entered(&env);
+                    panic!("Program not initialized")
+                });
 
         // 3. Operational state: paused
         if Self::check_paused(&env, symbol_short!("release")) {
@@ -2586,6 +2588,44 @@ impl ProgramEscrowContract {
         claim_period::get_claim_window(&env)
     }
 
+    // ========================================================================
+    // Payout Splits
+    // ========================================================================
+
+    pub fn set_split_config(
+        env: Env,
+        program_id: String,
+        beneficiaries: soroban_sdk::Vec<BeneficiarySplit>,
+    ) -> SplitConfig {
+        payout_splits::set_split_config(&env, &program_id, beneficiaries)
+    }
+
+    pub fn get_split_config(env: Env, program_id: String) -> Option<SplitConfig> {
+        payout_splits::get_split_config(&env, &program_id)
+    }
+
+    pub fn disable_split_config(env: Env, program_id: String) {
+        payout_splits::disable_split_config(&env, &program_id)
+    }
+
+    pub fn execute_split_payout(
+        env: Env,
+        program_id: String,
+        total_amount: i128,
+    ) -> SplitPayoutResult {
+        payout_splits::execute_split_payout(&env, &program_id, total_amount)
+    }
+
+    pub fn preview_split(
+        env: Env,
+        program_id: String,
+        total_amount: i128,
+    ) -> soroban_sdk::Vec<BeneficiarySplit> {
+        payout_splits::preview_split(&env, &program_id, total_amount)
+    }
+
+    // ========================================================================
+    // Dispute Resolution
     // ========================================================================
     // Dispute Resolution
     // ========================================================================

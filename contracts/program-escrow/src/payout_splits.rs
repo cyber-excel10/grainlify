@@ -1,32 +1,56 @@
-// ============================================================
-// FILE: contracts/program-escrow/src/payout_splits.rs
-//
-// This module implements multi-beneficiary payout splits for Issue #[issue_id].
-//
-// Enables a single escrow to distribute funds across multiple recipients
-// using predefined share ratios, avoiding the need for multiple escrows.
-//
-// ## Design
-//
-// - Shares are expressed in basis points (1 bp = 0.01%), summing to 10_000 (100%)
-// - Dust (remainder after integer division) is awarded to the first beneficiary
-// - Splits are stored per-program and validated at creation time
-// - Both partial releases and full releases honour the ratio
-//
-// ## Integration (lib.rs)
-//
-//   mod payout_splits;
-//   pub use payout_splits::{BeneficiarySplit, SplitConfig};
-//
-// Add the following DataKey variants if not already present:
-//
-//   SplitConfig(String),   // program_id -> SplitConfig
-//
-// Expose the public functions inside the `ProgramEscrowContract` impl block.
-// ============================================================
+//! # Program Escrow: Payout Splits Module
+//!
+//! Enables a single escrow to distribute funds across multiple beneficiaries
+//! using predefined share ratios, avoiding the need for multiple escrows.
+//!
+//! ## Rounding Policy
+//!
+//! This module uses **floor (round-down)** rounding for all share calculations:
+//!
+//! ```text
+//! share_amount = floor(total_amount * share_bps / TOTAL_BASIS_POINTS)
+//! ```
+//!
+//! **Key Invariants:**
+//! 1. `sum(all_shares) = TOTAL_BASIS_POINTS` (10,000 bps = 100%)
+//! 2. `sum(distribution amounts) + dust = total_amount`
+//! 3. `sum(distribution amounts) ≤ total_amount` (no over-distribution)
+//! 4. Dust always goes to the first beneficiary (index 0)
+//!
+//! **Security Properties:**
+//! - Dust attacks are prevented: each beneficiary gets at most their proportional share
+//! - Total distributed never exceeds the input amount
+//! - No funds are lost: `remaining = total_amount - sum(distributions)`
+//!
+//! ## Usage
+//!
+//! ```rust,ignore
+//! // 1. Configure split for a program
+//! let beneficiaries = vec![
+//!     &env,
+//!     BeneficiarySplit { recipient: addr1, share_bps: 7_000 }, // 70%
+//!     BeneficiarySplit { recipient: addr2, share_bps: 3_000 }, // 30%
+//! ];
+//! set_split_config(&env, &program_id, beneficiaries);
+//!
+//! // 2. Preview distribution (no token transfer)
+//! let preview = preview_split(&env, &program_id, 1_000_000);
+//!
+//! // 3. Execute split payout (transfers tokens)
+//! let result = execute_split_payout(&env, &program_id, 1_000_000);
+//! ```
+//!
+//! ## Edge Cases
+//!
+//! | Scenario | Behavior |
+//! |----------|----------|
+//! | Amount < beneficiaries | Small amounts may result in 0 for some |
+//! | Dust from integer division | Goes to first beneficiary |
+//! | Disabled split config | Panics with `split config is disabled` |
+//! | Amount > remaining balance | Panics with `insufficient escrow balance` |
 
+use crate::{DataKey, PayoutRecord, ProgramData, PROGRAM_DATA};
 use soroban_sdk::{contracttype, symbol_short, token, Address, Env, String, Symbol, Vec};
-use crate::{DataKey, ProgramData, PayoutRecord, PROGRAM_DATA};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -120,6 +144,10 @@ fn save_program(env: &Env, data: &ProgramData) {
 /// * `program_id`     - The program this config applies to.
 /// * `beneficiaries`  - Ordered list of `BeneficiarySplit`. Index 0 receives dust.
 ///
+/// # Rounding
+/// Shares are validated to sum exactly to `TOTAL_BASIS_POINTS` (10,000).
+/// Any rounding dust during payout goes to index 0.
+///
 /// # Panics
 /// * If the caller is not the `authorized_payout_key`.
 /// * If `beneficiaries` is empty or has more than 50 entries.
@@ -183,9 +211,7 @@ pub fn set_split_config(
 ///
 /// Returns `None` if no split config has been set.
 pub fn get_split_config(env: &Env, program_id: &String) -> Option<SplitConfig> {
-    env.storage()
-        .persistent()
-        .get(&split_key(program_id))
+    env.storage().persistent().get(&split_key(program_id))
 }
 
 /// Deactivate the split configuration for a program.
@@ -208,9 +234,24 @@ pub fn disable_split_config(env: &Env, program_id: &String) {
 
 /// Execute a split payout of `total_amount` according to the stored `SplitConfig`.
 ///
-/// The amount is divided proportionally using basis-point arithmetic.  Any
-/// remainder from integer division (dust) is added to the **first** beneficiary,
-/// ensuring the full `total_amount` is always distributed without drift.
+/// ## Rounding Implementation
+///
+/// Each beneficiary receives:
+/// ```text
+/// amount_i = floor(total_amount * share_bps_i / TOTAL_BASIS_POINTS)
+/// ```
+///
+/// Dust (remainder) is computed as:
+/// ```text
+/// dust = total_amount - sum(amount_i for all i)
+/// dust_amount_0 = amount_0 + dust  // dust goes to first beneficiary
+/// ```
+///
+/// ## Security Invariants
+///
+/// 1. **No over-distribution**: `sum(amounts) = total_amount` (dust absorbed)
+/// 2. **Balance protection**: `total_amount ≤ remaining_balance`
+/// 3. **Dust absorption**: First beneficiary absorbs dust, preventing fund loss
 ///
 /// # Arguments
 /// * `program_id`   - The program whose config to use.
@@ -322,14 +363,16 @@ pub fn execute_split_payout(
 
 /// Calculate the hypothetical split amounts for `total_amount` without executing transfers.
 ///
-/// Useful for off-chain previews and tests.  Dust is awarded to index 0.
+/// Useful for off-chain previews and tests. Uses the same floor rounding as
+/// `execute_split_payout`; dust is awarded to index 0.
 ///
-/// Returns a `Vec` of `(recipient, amount)` pairs in config order.
-pub fn preview_split(
-    env: &Env,
-    program_id: &String,
-    total_amount: i128,
-) -> Vec<BeneficiarySplit> {
+/// ## Rounding
+/// Same as `execute_split_payout`: each share uses floor division,
+/// with dust absorbed by the first beneficiary.
+///
+/// Returns a `Vec` of `BeneficiarySplit` where the `share_bps` field
+/// contains the computed amount for each beneficiary.
+pub fn preview_split(env: &Env, program_id: &String, total_amount: i128) -> Vec<BeneficiarySplit> {
     let config: SplitConfig = env
         .storage()
         .persistent()
