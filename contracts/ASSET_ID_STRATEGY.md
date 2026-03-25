@@ -21,6 +21,9 @@ Use shared helpers from `contracts/grainlify-core/src/asset.rs`:
 
 - `normalize_asset_id(env, raw_asset_id)`
 - `validate_asset_id(env, asset_id)`
+- `token_client(env, asset_id)`
+- `balance(env, asset_id, holder)`
+- `transfer_exact(env, asset_id, from, to, amount)`
 
 These helpers are used by:
 
@@ -45,3 +48,13 @@ Rejected inputs:
 ## Rationale
 
 This removes format drift between escrow modules by enforcing one asset-id type and one validator. It prevents subtle mismatches where one module might store or accept account-style addresses while another expects contract ids.
+
+## Token Interface Expectations
+
+The helper now targets the Soroban `TokenClient` surface directly rather than the deprecated `token::Client` alias. Asset validation continues to enforce contract-only identifiers and rejects account-style addresses before token operations are attempted.
+
+## Transfer Semantics
+
+Escrow accounting in Grainlify assumes exact token movements. `transfer_exact(...)` therefore verifies both sender and recipient balance deltas around the token transfer and rejects tokens whose observed behaviour does not match the requested amount.
+
+This intentionally treats fee-on-transfer and other balance-mutating token designs as incompatible with current escrow logic unless callers explicitly handle those semantics elsewhere.
