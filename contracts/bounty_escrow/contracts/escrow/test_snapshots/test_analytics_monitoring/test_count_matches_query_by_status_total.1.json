@@ -499,7 +499,7 @@
                 },
                 "durability": "persistent",
                 "val": {
-                  "u64": 4
+                  "u64": 3
                 }
               }
             },

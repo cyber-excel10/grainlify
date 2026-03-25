@@ -551,7 +551,7 @@
                 },
                 "durability": "persistent",
                 "val": {
-                  "u64": 5
+                  "u64": 3
                 }
               }
             },

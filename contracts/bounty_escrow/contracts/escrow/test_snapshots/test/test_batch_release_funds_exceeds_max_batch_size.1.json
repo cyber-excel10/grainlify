@@ -3832,6 +3832,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "ReentrancyGuard"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "bool": true
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "Token"
                             }
                           ]
@@ -9051,16 +9063,439 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fn_return"
-              },
-              {
-                "symbol": "batch_release_funds"
+                "symbol": "log"
               }
             ],
             "data": {
-              "error": {
-                "contract": 10
-              }
+              "vec": [
+                {
+                  "string": "caught panic 'Reentrancy detected' from contract function 'Symbol(obj#3847)'"
+                },
+                {
+                  "vec": [
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 1
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 2
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 3
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 4
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 5
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVAX5"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 6
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAXI7N"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 7
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYRE5"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 8
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 9
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 10
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA6J5N"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 11
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABB6KO"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 12
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABDWC6"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 13
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABFO3O"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 14
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABHGT6"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 15
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABI7IO"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 16
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABKXA6"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 17
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABMPZO"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 18
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABOHR6"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 19
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABR4OP"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 20
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABTUG7"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "bounty_id"
+                          },
+                          "val": {
+                            "u64": 21
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "contributor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABVM7P"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
             }
           }
         }
@@ -9080,12 +9515,12 @@
               },
               {
                 "error": {
-                  "contract": 10
+                  "wasm_vm": "invalid_action"
                 }
               }
             ],
             "data": {
-              "string": "escalating Ok(ScErrorType::Contract) frame-exit to Err"
+              "string": "caught error from function"
             }
           }
         }
@@ -9105,7 +9540,7 @@
               },
               {
                 "error": {
-                  "contract": 10
+                  "wasm_vm": "invalid_action"
                 }
               }
             ],
@@ -9565,7 +10000,7 @@
               },
               {
                 "error": {
-                  "contract": 10
+                  "wasm_vm": "invalid_action"
                 }
               }
             ],
