@@ -11,6 +11,9 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
     String, Symbol, Vec,
 };
+
+#[cfg(test)]
+use soroban_sdk::testutils::Address as _;
 pub mod asset;
 mod governance;
 pub mod nonce;
@@ -62,6 +65,23 @@ pub struct UpgradeEvent {
     pub version: u32,
     /// Ledger timestamp when the upgrade was executed.
     pub timestamp: u64,
+}
+
+/// Canonical read model for a multisig upgrade proposal.
+///
+/// Approval and execution status remain in [`MultiSig`], while upgrade-specific
+/// metadata is stored in instance storage under the same stable `proposal_id`.
+/// `proposer` is optional to preserve compatibility with older proposal rows
+/// that predate explicit proposer storage.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UpgradeProposalRecord {
+    /// Stable multisig proposal identifier returned by `propose_upgrade`.
+    pub proposal_id: u64,
+    /// Address that created the proposal, when explicitly recorded.
+    pub proposer: Option<Address>,
+    /// WASM hash that will be installed if the proposal executes.
+    pub wasm_hash: BytesN<32>,
 }
 
 // ==================== MONITORING MODULE ====================
@@ -491,9 +511,9 @@ mod monitoring {
 #[cfg(test)]
 mod test_core_monitoring;
 #[cfg(test)]
-mod test_performance_stats;
-#[cfg(test)]
 mod test_serialization_compatibility;
+#[cfg(test)]
+mod test_pseudo_randomness;
 #[cfg(test)]
 mod test_version_helpers;
 
@@ -560,6 +580,12 @@ enum DataKey {
 
     /// WASM hash stored per proposal (for multisig upgrades)
     UpgradeProposal(u64),
+
+    /// Proposer recorded per upgrade proposal.
+    /// - Added as a separate key to preserve compatibility with older
+    ///   deployments that already store `UpgradeProposal(u64)` as a raw hash.
+    /// - Uses the same stable proposal identifier returned by `propose_upgrade`.
+    UpgradeProposalProposer(u64),
 
     /// Migration state tracking - prevents double migration
     /// - Set after successful migrate() call
@@ -636,6 +662,77 @@ pub struct CoreConfigSnapshot {
     pub previous_version: Option<u32>,
     pub multisig_threshold: u32,
     pub multisig_signers: Vec<Address>,
+}
+
+/// Comparison result between two [`CoreConfigSnapshot`]s.
+///
+/// Produced by [`GrainlifyContract::compare_snapshots`] to highlight what
+/// changed between two points in time. Every field is `true` when the
+/// corresponding value differs between the two snapshots.
+///
+/// # Usage
+/// Auditors and off-chain tooling can call `compare_snapshots(old_id, new_id)`
+/// to quickly identify configuration drift without fetching and diffing
+/// full snapshot payloads.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SnapshotDiff {
+    /// ID of the earlier ("before") snapshot.
+    pub from_id: u64,
+    /// ID of the later ("after") snapshot.
+    pub to_id: u64,
+    /// `true` when the admin address changed between snapshots.
+    pub admin_changed: bool,
+    /// `true` when the contract version changed between snapshots.
+    pub version_changed: bool,
+    /// `true` when the `previous_version` field changed.
+    pub previous_version_changed: bool,
+    /// `true` when the multisig threshold changed.
+    pub multisig_threshold_changed: bool,
+    /// `true` when the multisig signer set changed.
+    pub multisig_signers_changed: bool,
+    /// Version in the "from" snapshot.
+    pub from_version: u32,
+    /// Version in the "to" snapshot.
+    pub to_version: u32,
+}
+
+/// Aggregated rollback intelligence for recovery drills.
+///
+/// Returned by [`GrainlifyContract::get_rollback_info`] to give operators a
+/// single-call view of everything needed to assess whether a rollback is
+/// possible and what it would entail.
+///
+/// All nested struct fields are flattened to scalar types for Soroban
+/// serialization compatibility.
+///
+/// # Security note
+/// This is a pure view function — no authorization required, no state mutation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RollbackInfo {
+    /// Current on-chain contract version.
+    pub current_version: u32,
+    /// Version before the last upgrade (0 if never upgraded).
+    pub previous_version: u32,
+    /// `true` when a `previous_version` exists and a rollback target is known.
+    pub rollback_available: bool,
+    /// `true` when a migration state record exists.
+    pub has_migration: bool,
+    /// Migration source version (0 if no migration).
+    pub migration_from_version: u32,
+    /// Migration target version (0 if no migration).
+    pub migration_to_version: u32,
+    /// Timestamp when the last migration completed (0 if no migration).
+    pub migration_timestamp: u64,
+    /// Number of retained configuration snapshots available for restore.
+    pub snapshot_count: u32,
+    /// `true` when at least one configuration snapshot exists.
+    pub has_snapshot: bool,
+    /// ID of the most recent snapshot (0 if none).
+    pub latest_snapshot_id: u64,
+    /// Version captured in the most recent snapshot (0 if none).
+    pub latest_snapshot_version: u32,
 }
 
 fn contract_is_initialized(env: &Env) -> bool {
@@ -807,6 +904,10 @@ impl GrainlifyContract {
         if contract_is_initialized(&env) {
             panic!("Already initialized");
         }
+
+        let caller = signers
+            .get(0)
+            .expect("multisig init requires at least one signer");
 
         // Initialize multisig configuration
         MultiSig::init(&env, signers, threshold);
@@ -1000,6 +1101,16 @@ impl GrainlifyContract {
 
     /// Proposes an upgrade with a new WASM hash (multisig version).
     ///
+    /// # Proposal Lifecycle
+    /// 1. Allocates a fresh, monotonic proposal identifier from [`MultiSig`].
+    /// 2. Stores the upgrade metadata (`wasm_hash`, `proposer`) under that id.
+    /// 3. Returns the identifier for later calls to [`approve_upgrade`] and
+    ///    [`execute_upgrade`].
+    ///
+    /// Proposal identifiers are stable and never intentionally reused. This
+    /// function panics if a freshly allocated id would overwrite existing
+    /// upgrade metadata.
+    ///
     /// # Arguments
     /// * `env` - The contract environment
     /// * `proposer` - Address proposing the upgrade
@@ -1008,11 +1119,26 @@ impl GrainlifyContract {
     /// # Returns
     /// * `u64` - The proposal ID
     pub fn propose_upgrade(env: Env, proposer: Address, wasm_hash: BytesN<32>) -> u64 {
-        let proposal_id = MultiSig::propose(&env, proposer);
+        let proposal_id = MultiSig::propose(&env, proposer.clone());
+
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::UpgradeProposal(proposal_id))
+            || env
+                .storage()
+                .instance()
+                .has(&DataKey::UpgradeProposalProposer(proposal_id))
+        {
+            panic!("duplicate upgrade proposal id");
+        }
 
         env.storage()
             .instance()
             .set(&DataKey::UpgradeProposal(proposal_id), &wasm_hash);
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeProposalProposer(proposal_id), &proposer);
 
         proposal_id
     }
@@ -1023,8 +1149,20 @@ impl GrainlifyContract {
     /// * `env` - The contract environment
     /// * `proposal_id` - The ID of the proposal to approve
     /// * `signer` - Address approving the proposal
+    ///
+    /// The `proposal_id` must be the stable identifier returned by
+    /// [`propose_upgrade`]. Approval state is maintained by [`MultiSig`].
     pub fn approve_upgrade(env: Env, proposal_id: u64, signer: Address) {
         MultiSig::approve(&env, proposal_id, signer);
+    }
+
+    /// Returns the upgrade proposal metadata stored for `proposal_id`.
+    ///
+    /// This view is intended for review tooling, off-chain auditors, and tests
+    /// that need to confirm which WASM hash and proposer are bound to a given
+    /// multisig proposal identifier.
+    pub fn get_upgrade_proposal(env: Env, proposal_id: u64) -> Option<UpgradeProposalRecord> {
+        Self::load_upgrade_proposal(&env, proposal_id)
     }
 
     /// Upgrades the contract to new WASM code.
@@ -1136,37 +1274,90 @@ impl GrainlifyContract {
     /// # State Preservation
     /// All instance storage is preserved across the WASM replacement.
     pub fn execute_upgrade(env: Env, proposal_id: u64) {
-        if !MultiSig::can_execute(&env, proposal_id) {
-            panic!("Threshold not met");
+        let start = env.ledger().timestamp();
+
+        // Security: Verify contract state is consistent before upgrade
+        if !monitoring::verify_invariants(&env) {
+            monitoring::track_operation(
+                &env, 
+                symbol_short!("execute_upgrade"), 
+                env.current_contract_address(), 
+                false
+            );
+            panic!("Contract state inconsistent - upgrade blocked");
         }
 
-        let wasm_hash: BytesN<32> = env
-            .storage()
-            .instance()
-            .get(&DataKey::UpgradeProposal(proposal_id))
-            .expect("Missing upgrade proposal");
+        // Verify proposal exists and has sufficient approvals
+        if !MultiSig::can_execute(&env, proposal_id) {
+            monitoring::track_operation(
+                &env, 
+                symbol_short!("execute_upgrade"), 
+                env.current_contract_address(), 
+                false
+            );
+            panic!("Threshold not met or proposal not executable");
+        }
 
-        // Store previous version for potential rollback
-        let current_version: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(1);
+        let proposal =
+            Self::load_upgrade_proposal(&env, proposal_id).expect("Missing upgrade proposal");
+
+        // Store previous version for rollback tracking
+        let current_version = env.storage().instance().get(&DataKey::Version).unwrap_or(1);
         env.storage()
             .instance()
             .set(&DataKey::PreviousVersion, &current_version);
 
         // Perform WASM upgrade — instance storage is preserved
         env.deployer()
-            .update_current_contract_wasm(wasm_hash.clone());
+            .update_current_contract_wasm(proposal.wasm_hash.clone());
 
         // Emit structured upgrade event for off-chain indexers
         env.events().publish(
             (symbol_short!("upgrade"), symbol_short!("wasm")),
             UpgradeEvent {
-                new_wasm_hash: wasm_hash,
+                new_wasm_hash: proposal.wasm_hash,
                 version: current_version,
                 timestamp: env.ledger().timestamp(),
             },
         );
 
+        // Mark proposal as executed (prevents re-execution)
         MultiSig::mark_executed(&env, proposal_id);
+
+        // Track successful operation
+        monitoring::track_operation(
+            &env, 
+            symbol_short!("execute_upgrade"), 
+            env.current_contract_address(), 
+            true
+        );
+
+        // Track performance
+        let duration = env.ledger().timestamp().saturating_sub(start);
+        monitoring::emit_performance(&env, symbol_short!("execute_upgrade"), duration);
+
+        // Emit upgrade execution event
+        env.events().publish(
+            (symbol_short!("upgrade_executed"),),
+            (proposal_id, wasm_hash, current_version),
+        );
+    }
+
+    fn load_upgrade_proposal(env: &Env, proposal_id: u64) -> Option<UpgradeProposalRecord> {
+        let wasm_hash = env
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeProposal(proposal_id))?;
+        let proposer = env
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeProposalProposer(proposal_id));
+
+        Some(UpgradeProposalRecord {
+            proposal_id,
+            proposer,
+            wasm_hash,
+        })
     }
 
     /// Upgrades the contract to new WASM code (single admin version).
@@ -1713,6 +1904,62 @@ impl GrainlifyContract {
     }
 
     // ========================================================================
+    // Emergency Controls
+    // ========================================================================
+
+    /// Pause the contract (emergency function).
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `signer` - Address of the signer authorizing the pause
+    ///
+    /// # Security
+    /// - Only authorized multisig signers can pause
+    /// - Paused state blocks all critical operations including upgrades
+    ///
+    /// # Events
+    /// - Emits pause event with signer address
+    pub fn pause(env: Env, signer: Address) {
+        MultiSig::pause(&env, signer);
+    }
+
+    /// Unpause the contract.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `signer` - Address of the signer authorizing the unpause
+    ///
+    /// # Security
+    /// - Only authorized multisig signers can unpause
+    /// - Restores normal contract operations
+    ///
+    /// # Events
+    /// - Emits unpause event with signer address
+    pub fn unpause(env: Env, signer: Address) {
+        MultiSig::unpause(&env, signer);
+    }
+
+    /// Check if contract is currently paused.
+    ///
+    /// # Returns
+    /// * `bool` - True if contract is paused, false otherwise
+    pub fn is_paused(env: Env) -> bool {
+        MultiSig::is_contract_paused(&env)
+    }
+
+    /// Check if a proposal can be executed.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `proposal_id` - The ID of the proposal to check
+    ///
+    /// # Returns
+    /// * `bool` - True if proposal can be executed, false otherwise
+    pub fn can_execute(env: Env, proposal_id: u64) -> bool {
+        MultiSig::can_execute(&env, proposal_id)
+    }
+
+    // ========================================================================
     // State Migration System
     // ========================================================================
 
@@ -2080,6 +2327,8 @@ mod test {
     // Include end-to-end upgrade and migration tests
     pub mod e2e_upgrade_migration_tests;
     pub mod invariant_entrypoints_tests;
+    pub mod state_snapshot_tests;
+    pub mod upgrade_rollback_scenarios;
     pub mod upgrade_rollback_tests;
 
     // WASM for testing (only available after building for wasm32 target)

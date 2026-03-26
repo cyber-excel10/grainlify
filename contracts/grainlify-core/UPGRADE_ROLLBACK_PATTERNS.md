@@ -73,6 +73,12 @@ client.init(&signers, &2);  // 2 of 3 threshold
 // Propose upgrade
 let proposal_id = client.propose_upgrade(&signer1, &new_wasm_hash);
 
+// Review the persisted proposal metadata before approvals.
+let proposal = client.get_upgrade_proposal(&proposal_id).unwrap();
+assert_eq!(proposal.proposal_id, proposal_id);
+assert_eq!(proposal.proposer, Some(signer1.clone()));
+assert_eq!(proposal.wasm_hash, new_wasm_hash);
+
 // Collect approvals
 client.approve_upgrade(&proposal_id, &signer1);
 client.approve_upgrade(&proposal_id, &signer2);
@@ -121,6 +127,11 @@ client.set_version(&prev_version);
 ```rust
 // Propose rollback to previous WASM
 let rollback_proposal = client.propose_upgrade(&signer1, &previous_wasm_hash);
+
+// Proposal ids are monotonic and remain stable across the full lifecycle.
+let rollback_state = client.get_upgrade_proposal(&rollback_proposal).unwrap();
+assert_eq!(rollback_state.proposer, Some(signer1.clone()));
+assert_eq!(rollback_state.wasm_hash, previous_wasm_hash);
 
 // Fast-track approvals for emergency
 client.approve_upgrade(&rollback_proposal, &signer1);
@@ -247,6 +258,7 @@ The following scenarios are documented and should be tested in integration envir
    ```
 
 2. **Monitor Analytics**
+
    ```rust
    let analytics = client.get_analytics();
    // Check error rates, operation counts
@@ -311,14 +323,14 @@ stellar contract invoke \
 
 # 2. Fast-track approvals
 stellar contract invoke --id CONTRACT_ID --source SIGNER1_KEY \
-  -- approve_upgrade --proposal_id 0 --signer SIGNER1_ADDR
+   -- approve_upgrade --proposal_id "$PROPOSAL_ID" --signer SIGNER1_ADDR
 
 stellar contract invoke --id CONTRACT_ID --source SIGNER2_KEY \
-  -- approve_upgrade --proposal_id 0 --signer SIGNER2_ADDR
+   -- approve_upgrade --proposal_id "$PROPOSAL_ID" --signer SIGNER2_ADDR
 
 # 3. Execute
 stellar contract invoke --id CONTRACT_ID \
-  -- execute_upgrade --proposal_id 0
+   -- execute_upgrade --proposal_id "$PROPOSAL_ID"
 ```
 
 ## Version History

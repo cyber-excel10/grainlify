@@ -44,7 +44,7 @@ mod test_fee_routing {
         let partner = Address::generate(&env);
 
         token_admin.mint(&depositor, &1_000);
-        client.update_fee_config(&Some(1000), &Some(0), &Some(treasury.clone()), &Some(true));
+        client.update_fee_config(&Some(1000), &Some(0), &None, &None, &Some(treasury.clone()), &Some(true));
         client.set_fee_routing(&1, &treasury, &7000, &Some(partner.clone()), &3000);
 
         client.lock_funds(&depositor, &1, &1_000, &(env.ledger().timestamp() + 1_000));
@@ -69,7 +69,7 @@ mod test_fee_routing {
         let partner = Address::generate(&env);
 
         token_admin.mint(&depositor, &1_000);
-        client.update_fee_config(&Some(0), &Some(333), &Some(treasury.clone()), &Some(true));
+        client.update_fee_config(&Some(0), &Some(333), &None, &None, &Some(treasury.clone()), &Some(true));
         client.set_fee_routing(&2, &treasury, &5000, &Some(partner.clone()), &5000);
 
         client.lock_funds(&depositor, &2, &1_000, &(env.ledger().timestamp() + 1_000));
@@ -94,7 +94,7 @@ mod test_fee_routing {
         let treasury = Address::generate(&env);
 
         token_admin.mint(&depositor, &1_000);
-        client.update_fee_config(&Some(0), &Some(500), &Some(treasury.clone()), &Some(true));
+        client.update_fee_config(&Some(0), &Some(500), &None, &None, &Some(treasury.clone()), &Some(true));
 
         client.lock_funds(&depositor, &3, &1_000, &(env.ledger().timestamp() + 1_000));
         client.release_funds(&3, &contributor);

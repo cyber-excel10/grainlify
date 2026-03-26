@@ -32,7 +32,7 @@
 //! * All `symbol_short!` strings are ≤ 8 bytes — Soroban silently truncates
 //!   longer strings, which would corrupt topic-based filtering.
 use crate::CapabilityAction;
-use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env};
+use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Symbol};
 
 // ── Version constant ─────────────────────────────────────────────────────────
 
@@ -937,93 +937,5 @@ pub struct CapabilityRevoked {
 /// Emit [`CapabilityRevoked`]
 pub fn emit_capability_revoked(env: &Env, event: CapabilityRevoked) {
     let topics = (symbol_short!("cap_rev"), event.capability_id);
-    env.events().publish(topics, event);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ESCROW EXPIRY & CLEANUP EVENTS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/// Payload for the [`emit_escrow_expired`] event.
-///
-/// Emitted when an escrow is marked as expired (status transitions to `Expired`).
-///
-/// ### Topics
-/// | Index | Value |
-/// |-------|-------|
-/// | 0 | `"e_expiry"` |
-/// | 1 | `bounty_id: u64` |
-///
-/// ### Security notes
-/// - An escrow can only be marked expired if its `expiry` timestamp has
-///   been reached and it is still in `Locked` status with zero remaining balance.
-/// - Escrows with non-zero balances are never auto-expired; they must be
-///   refunded or released first.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EscrowExpired {
-    pub version: u32,
-    pub bounty_id: u64,
-    pub creation_timestamp: u64,
-    pub expiry: u64,
-    pub remaining_amount: i128,
-    pub timestamp: u64,
-}
-
-/// Emit [`EscrowExpired`]
-pub fn emit_escrow_expired(env: &Env, event: EscrowExpired) {
-    let topics = (symbol_short!("e_expiry"), event.bounty_id);
-    env.events().publish(topics, event);
-}
-
-/// Payload for the [`emit_escrow_cleaned_up`] event.
-///
-/// Emitted when an expired, zero-balance escrow is removed from storage.
-///
-/// ### Topics
-/// | Index | Value |
-/// |-------|-------|
-/// | 0 | `"e_clean"` |
-/// | 1 | `bounty_id: u64` |
-///
-/// ### Security notes
-/// - Only escrows in `Expired` status with `remaining_amount == 0` can be
-///   cleaned up.
-/// - Cleanup removes the escrow record and index entries, freeing storage.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EscrowCleanedUp {
-    pub version: u32,
-    pub bounty_id: u64,
-    pub cleaned_by: Address,
-    pub timestamp: u64,
-}
-
-/// Emit [`EscrowCleanedUp`]
-pub fn emit_escrow_cleaned_up(env: &Env, event: EscrowCleanedUp) {
-    let topics = (symbol_short!("e_clean"), event.bounty_id);
-    env.events().publish(topics, event);
-}
-
-/// Payload for the [`emit_expiry_config_updated`] event.
-///
-/// Emitted when the admin updates the global escrow expiry configuration.
-///
-/// ### Topics
-/// | Index | Value |
-/// |-------|-------|
-/// | 0 | `"exp_cfg"` |
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ExpiryConfigUpdated {
-    pub default_expiry_duration: u64,
-    pub auto_cleanup_enabled: bool,
-    pub admin: Address,
-    pub timestamp: u64,
-}
-
-/// Emit [`ExpiryConfigUpdated`]
-pub fn emit_expiry_config_updated(env: &Env, event: ExpiryConfigUpdated) {
-    let topics = (symbol_short!("exp_cfg"),);
     env.events().publish(topics, event);
 }

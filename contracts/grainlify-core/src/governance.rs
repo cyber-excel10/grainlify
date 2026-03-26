@@ -180,7 +180,7 @@ pub struct GovernanceContract;
 
 impl GovernanceContract {
     /// Initializes governance state for the standalone governance contract.
-    pub fn init_governance(
+    pub fn init_governance_state(
         env: Env,
         admin: Address,
         config: GovernanceConfig,

@@ -155,12 +155,14 @@ fn test_optional_parameters_backward_compatible() {
     client.init(&admin, &token);
 
     // Test that update_fee_config works with None values (optional params)
-    client.update_fee_config(&None, &None, &None, &None);
+    client.update_fee_config(&None, &None, &None, &None, &None, &None);
 
     // Config should remain unchanged
     let config = client.get_fee_config();
     assert_eq!(config.lock_fee_rate, 0);
     assert_eq!(config.release_fee_rate, 0);
+    assert!(!config.distribution_enabled);
+    assert_eq!(config.treasury_destinations.len(), 0);
 }
 
 /// Test that new features don't break existing workflows

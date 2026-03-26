@@ -47,6 +47,16 @@ The escrow contract provides read-only dry-run entrypoints for previewing operat
 
 All return `SimulationResult` with success/error_code/amount/resulting_status/remaining_amount. No authorization required.
 
+## Participant filters
+
+The bounty escrow contract supports mutually exclusive participant filtering for new locks:
+
+- `Disabled` lets any depositor lock funds.
+- `BlocklistOnly` rejects blocklisted depositors with `ParticipantBlocked`.
+- `AllowlistOnly` accepts only allowlisted depositors and rejects others with `ParticipantNotAllowed`.
+
+Mode changes emit `ParticipantFilterModeChanged`, and allowlist entries continue to bypass anti-abuse cooldown checks even when filtering is disabled. See [contracts/escrow/PARTICIPANT_FILTER.md](contracts/escrow/PARTICIPANT_FILTER.md) for the full behavior matrix and edge cases.
+
 ## Metadata Constraints
 
 The escrow metadata API enforces validation rules for human-readable tags like
@@ -58,6 +68,26 @@ limits and guidance.
 ## Risk flags (bounty metadata)
 
 Per-bounty risk signaling uses a `u32` bitfield on escrow metadata (`RISK_FLAG_*` constants in `lib.rs`). Admin-only entrypoints `set_escrow_risk_flags` and `clear_escrow_risk_flags` persist flags and emit `RiskFlagsUpdated` (versioned payload with `previous_flags`, `new_flags`, `admin`, `timestamp`) for indexers. Flags are informational on-chain; policy enforcement is expected off-chain. Tests: `contracts/escrow/src/test_risk_flags.rs`.
+
+## Treasury routing
+
+The escrow contract supports optional multi-region treasury routing for collected
+fees. Admins configure weighted `TreasuryDestination` entries through
+`set_treasury_distributions`, then enable routing with `distribution_enabled =
+true`.
+
+- Lock and release fees continue to use the existing fee rates.
+- When routing is disabled, the full fee is sent to the configured
+  `fee_recipient`.
+- When routing is enabled, the fee is split proportionally across treasury
+  destinations by weight.
+- Rounding remains deterministic: any remainder is assigned to the final
+  destination in config order so the distributed total always matches the
+  collected fee exactly.
+- Invalid enabled configurations are rejected if there are no destinations or
+  if any destination has zero weight.
+
+Tests: `contracts/escrow/src/test_multi_region_treasury.rs`.
 
 ## Boundary limits
 

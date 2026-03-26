@@ -14,15 +14,15 @@ Default after init is **Disabled**.
 
 ## Admin API
 
-- **`set_filter_mode(mode)`** — Set the active mode (admin only). Emits `ParticipantFilterModeChanged` (topic `p_filter`) with `previous_mode`, `new_mode`, `admin`, `timestamp`.
+- **`set_filter_mode(mode)`** — Set the active mode (admin only). Emits `ParticipantFilterModeChanged` (topic `pf_mode`) with `previous_mode`, `new_mode`, `admin`, `timestamp`.
 - **`get_filter_mode()`** — View current mode.
 - **`set_whitelist_entry(address, true|false)`** — Add/remove from allowlist (admin only). In AllowlistOnly mode this controls who can participate; in other modes it only affects anti-abuse bypass.
 - **`set_blocklist_entry(address, true|false)`** — Add/remove from blocklist (admin only). Only enforced when mode is BlocklistOnly.
 
 ## Errors
 
-- **`ParticipantBlocked`** (32) — Mode is BlocklistOnly and the depositor is blocklisted.
-- **`ParticipantNotAllowed`** (33) — Mode is AllowlistOnly and the depositor is not on the allowlist.
+- **`ParticipantBlocked`** (35) — Mode is BlocklistOnly and the depositor is blocklisted.
+- **`ParticipantNotAllowed`** (36) — Mode is AllowlistOnly and the depositor is not on the allowlist.
 
 ## State transitions
 
@@ -39,5 +39,6 @@ Participant filtering is enforced only at **lock** time:
 
 - `lock_funds(depositor, ...)` — `depositor` is checked against the current mode.
 - `batch_lock_funds(items)` — each `item.depositor` is checked; if any fails, the whole batch reverts.
+- Anti-abuse cooldown and rate-limit checks still run after the participant filter check unless the depositor is allowlisted.
 
 Release, refund, and other operations do **not** check participant mode; only who can **create** new escrows is restricted.

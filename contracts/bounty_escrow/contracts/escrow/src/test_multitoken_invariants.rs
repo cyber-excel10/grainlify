@@ -91,6 +91,8 @@ fn test_inv1_healthy_escrow_passes() {
         refund_history: soroban_sdk::Vec::new(&Env::default()),
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
     assert!(multitoken_invariants::check_escrow_sanity(&escrow));
 }
@@ -106,6 +108,8 @@ fn test_inv1_negative_amount_fails() {
         refund_history: soroban_sdk::Vec::new(&Env::default()),
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
     assert!(!multitoken_invariants::check_escrow_sanity(&escrow));
 }
@@ -121,6 +125,8 @@ fn test_inv1_remaining_exceeds_amount_fails() {
         refund_history: soroban_sdk::Vec::new(&Env::default()),
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
     assert!(!multitoken_invariants::check_escrow_sanity(&escrow));
 }
@@ -136,6 +142,8 @@ fn test_inv1_released_with_nonzero_remaining_fails() {
         refund_history: soroban_sdk::Vec::new(&Env::default()),
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
     assert!(!multitoken_invariants::check_escrow_sanity(&escrow));
 }
@@ -151,6 +159,8 @@ fn test_inv1_refunded_with_nonzero_remaining_fails() {
         refund_history: soroban_sdk::Vec::new(&Env::default()),
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
     assert!(!multitoken_invariants::check_escrow_sanity(&escrow));
 }
@@ -325,6 +335,8 @@ fn test_inv4_no_refund_history_is_consistent() {
         refund_history: soroban_sdk::Vec::new(&Env::default()),
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
     assert!(multitoken_invariants::check_refund_consistency(&escrow));
 }

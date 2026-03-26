@@ -8,16 +8,16 @@
 //!
 //! ## Pause Flag Matrix
 //!
-//! | lock_paused | release_paused | refund_paused | lock_funds | single_payout | batch_payout |
-//! |-------------|----------------|---------------|------------|---------------|--------------|
-//! | false       | false          | false         | ✓          | ✓             | ✓            |
-//! | true        | false          | false         | ✗          | ✓             | ✓            |
-//! | false       | true           | false         | ✓          | ✗             | ✗            |
-//! | false       | false          | true          | ✓          | ✓             | ✓            |
-//! | true        | true           | false         | ✗          | ✗             | ✗            |
-//! | true        | false          | true          | ✗          | ✓             | ✓            |
-//! | false       | true           | true          | ✓          | ✗             | ✗            |
-//! | true        | true           | true          | ✗          | ✗             | ✗            |
+//! | lock_paused | release_paused | refund_paused | lock_funds | single_payout | batch_payout | create_claim | execute_claim | cancel_claim |
+//! |-------------|----------------|---------------|------------|---------------|--------------|--------------|---------------|--------------|
+//! | false       | false          | false         | ✓          | ✓             | ✓            | ✓            | ✓             | ✓            |
+//! | true        | false          | false         | ✗          | ✓             | ✓            | ✓            | ✓             | ✓            |
+//! | false       | true           | false         | ✓          | ✗             | ✗            | ✗            | ✗             | ✓            |
+//! | false       | false          | true          | ✓          | ✓             | ✓            | ✓            | ✓             | ✗            |
+//! | true        | true           | false         | ✗          | ✗             | ✗            | ✗            | ✗             | ✓            |
+//! | true        | false          | true          | ✗          | ✓             | ✓            | ✓            | ✓             | ✗            |
+//! | false       | true           | true          | ✓          | ✗             | ✗            | ✗            | ✗             | ✗            |
+//! | true        | true           | true          | ✗          | ✗             | ✗            | ✗            | ✗             | ✗            |
 
 use super::*;
 use soroban_sdk::{testutils::Address as _, token, vec, Address, Env, String};
@@ -55,7 +55,14 @@ fn setup(
     // Initialize program
     let payout_key = Address::generate(env);
     let program_id = String::from_str(env, "test-prog");
-    client.init_program(&program_id, &payout_key, &token_addr, &admin, &None);
+    client.init_program(
+        &program_id,
+        &payout_key,
+        &token_addr,
+        &admin,
+        &None::<i128>,
+        &None::<soroban_sdk::Bytes>,
+    );
 
     // Fund the contract with tokens and lock them
     if initial_balance > 0 {
@@ -64,6 +71,51 @@ fn setup(
     }
 
     (client, token_client)
+}
+
+fn setup_claim_context(
+    env: &Env,
+    initial_balance: i128,
+) -> (
+    ProgramEscrowContractClient<'static>,
+    token::Client<'static>,
+    Address,
+    Address,
+    String,
+) {
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, ProgramEscrowContract);
+    let client = ProgramEscrowContractClient::new(env, &contract_id);
+
+    let token_admin = Address::generate(env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = token::Client::new(env, &token_addr);
+    let token_sac = token::StellarAssetClient::new(env, &token_addr);
+
+    let admin = Address::generate(env);
+    client.initialize_contract(&admin);
+
+    let payout_key = Address::generate(env);
+    let program_id = String::from_str(env, "claim-prog");
+    client.init_program(
+        &program_id,
+        &payout_key,
+        &token_addr,
+        &admin,
+        &None::<i128>,
+        &None::<soroban_sdk::Bytes>,
+    );
+
+    if initial_balance > 0 {
+        token_sac.mint(&contract_id, &initial_balance);
+        client.lock_program_funds(&initial_balance);
+    }
+
+    let contributor = Address::generate(env);
+    (client, token_client, admin, contributor, program_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -573,4 +625,85 @@ fn test_query_functions_unaffected_when_all_paused() {
 
     let balance = client.get_remaining_balance();
     assert_eq!(balance, 500);
+}
+
+// ---------------------------------------------------------------------------
+// § 13  Claim paths follow release/refund pause mapping
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_create_pending_claim_blocked_when_release_paused() {
+    let env = Env::default();
+    let (client, _token, _admin, contributor, program_id) = setup_claim_context(&env, 1_000);
+
+    client.set_paused(&None, &Some(true), &None, &None::<soroban_sdk::String>);
+    let result = client.try_create_pending_claim(&program_id, &contributor, &250, &10_000);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_create_pending_claim_allowed_when_lock_and_refund_paused() {
+    let env = Env::default();
+    let (client, _token, _admin, contributor, program_id) = setup_claim_context(&env, 1_000);
+
+    client.set_paused(
+        &Some(true),
+        &None,
+        &Some(true),
+        &None::<soroban_sdk::String>,
+    );
+
+    let claim_id = client.create_pending_claim(&program_id, &contributor, &250, &10_000);
+    let claim = client.get_claim(&program_id, &claim_id);
+    assert_eq!(claim.amount, 250);
+    assert_eq!(claim.recipient, contributor);
+}
+
+#[test]
+fn test_execute_claim_blocked_when_release_paused() {
+    let env = Env::default();
+    let (client, _token, _admin, contributor, program_id) = setup_claim_context(&env, 1_000);
+
+    let claim_id = client.create_pending_claim(&program_id, &contributor, &250, &10_000);
+    client.set_paused(&None, &Some(true), &None, &None::<soroban_sdk::String>);
+
+    let result = client.try_execute_claim(&program_id, &claim_id, &contributor);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_execute_claim_allowed_when_only_lock_paused() {
+    let env = Env::default();
+    let (client, token_client, _admin, contributor, program_id) = setup_claim_context(&env, 1_000);
+
+    let claim_id = client.create_pending_claim(&program_id, &contributor, &250, &10_000);
+    client.set_paused(&Some(true), &None, &None, &None::<soroban_sdk::String>);
+
+    client.execute_claim(&program_id, &claim_id, &contributor);
+    assert_eq!(token_client.balance(&contributor), 250);
+}
+
+#[test]
+fn test_cancel_claim_blocked_when_refund_paused() {
+    let env = Env::default();
+    let (client, _token, admin, contributor, program_id) = setup_claim_context(&env, 1_000);
+
+    let claim_id = client.create_pending_claim(&program_id, &contributor, &250, &10_000);
+    client.set_paused(&None, &None, &Some(true), &None::<soroban_sdk::String>);
+
+    let result = client.try_cancel_claim(&program_id, &claim_id, &admin);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_cancel_claim_allowed_when_release_paused() {
+    let env = Env::default();
+    let (client, _token, admin, contributor, program_id) = setup_claim_context(&env, 1_000);
+
+    let claim_id = client.create_pending_claim(&program_id, &contributor, &250, &10_000);
+    client.set_paused(&None, &Some(true), &None, &None::<soroban_sdk::String>);
+
+    client.cancel_claim(&program_id, &claim_id, &admin);
+    let claim = client.get_claim(&program_id, &claim_id);
+    assert_eq!(claim.status, ClaimStatus::Cancelled);
 }

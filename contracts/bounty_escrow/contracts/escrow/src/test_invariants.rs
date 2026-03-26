@@ -193,6 +193,8 @@ fn test_invariant_checker_catches_negative_amount() {
         refund_history: vec![&env],
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
 
     env.as_contract(&client.address, || {
@@ -217,6 +219,8 @@ fn test_invariant_checker_catches_negative_remaining_amount() {
         refund_history: vec![&env],
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
 
     env.as_contract(&client.address, || {
@@ -241,6 +245,8 @@ fn test_invariant_checker_catches_remaining_amount_exceeds_amount() {
         refund_history: vec![&env],
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
 
     env.as_contract(&client.address, || {
@@ -265,6 +271,8 @@ fn test_invariant_checker_catches_released_with_nonzero_remaining() {
         refund_history: vec![&env],
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
 
     env.as_contract(&client.address, || {
@@ -288,6 +296,8 @@ fn test_invariant_checker_allows_valid_edge_cases() {
         refund_history: vec![&env],
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
 
     env.as_contract(&client.address, || {
@@ -304,6 +314,8 @@ fn test_invariant_checker_allows_valid_edge_cases() {
         refund_history: vec![&env],
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
 
     env.as_contract(&client.address, || {
@@ -320,6 +332,8 @@ fn test_invariant_checker_allows_valid_edge_cases() {
         refund_history: vec![&env],
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
 
     env.as_contract(&client.address, || {
@@ -350,6 +364,8 @@ fn test_invariant_checker_partial_refund_state() {
         refund_history: vec![&env],
         creation_timestamp: 0,
         expiry: 0,
+        archived: false,
+        archived_at: None,
     };
 
     // This should pass invariants

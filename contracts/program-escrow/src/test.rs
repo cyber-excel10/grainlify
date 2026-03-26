@@ -2240,3 +2240,79 @@ fn test_release_schedules_persist_after_simulated_upgrade() {
     assert_eq!(stats_final.scheduled_count, 0);
     assert_eq!(stats_final.remaining_balance, 100_000);
 }
+
+#[test]
+fn test_program_fee_zero_by_default_matches_prior_payouts() {
+    let env = Env::default();
+    let (client, _admin, token_client, _token_admin) = setup_program(&env, 100_000);
+    let recipient = Address::generate(&env);
+    let data = client.single_payout(&recipient, &30_000);
+    assert_eq!(data.remaining_balance, 70_000);
+    assert_eq!(token_client.balance(&recipient), 30_000);
+}
+
+#[test]
+fn test_program_payout_fee_percentage_and_fixed() {
+    let env = Env::default();
+    let (client, admin, token_client, token_admin) = setup_program(&env, 0);
+    let fee_bucket = Address::generate(&env);
+    token_admin.mint(&client.address, &100_000);
+    client.lock_program_funds(&100_000);
+    client.update_fee_config(
+        &None,
+        &Some(1_000i128),
+        &None,
+        &Some(500i128),
+        &Some(fee_bucket.clone()),
+        &Some(true),
+    );
+    let recipient = Address::generate(&env);
+    // Gross 10_000: 10% ceil = 1_000 + 500 fixed = 1_500 fee, net 8_500
+    client.single_payout(&recipient, &10_000);
+    assert_eq!(token_client.balance(&recipient), 8_500);
+    assert_eq!(token_client.balance(&fee_bucket), 1_500);
+    assert_eq!(client.get_remaining_balance(), 90_000);
+    let _ = admin;
+}
+
+#[test]
+fn test_program_lock_fixed_fee_reduces_credited_balance() {
+    let env = Env::default();
+    let (client, admin, token_client, token_admin) = setup_program(&env, 0);
+    let fee_bucket = Address::generate(&env);
+    token_admin.mint(&client.address, &50_000);
+    client.update_fee_config(
+        &None,
+        &None,
+        &Some(2_000i128),
+        &None,
+        &Some(fee_bucket.clone()),
+        &Some(true),
+    );
+    client.lock_program_funds(&20_000);
+    assert_eq!(client.get_remaining_balance(), 18_000);
+    assert_eq!(token_client.balance(&fee_bucket), 2_000);
+    let _ = admin;
+}
+
+#[test]
+fn test_program_update_fee_config_disables_fees() {
+    let env = Env::default();
+    let (client, admin, token_client, token_admin) = setup_program(&env, 0);
+    let fee_bucket = Address::generate(&env);
+    token_admin.mint(&client.address, &50_000);
+    client.update_fee_config(
+        &None,
+        &None,
+        &Some(1_000i128),
+        &None,
+        &Some(fee_bucket.clone()),
+        &Some(true),
+    );
+    client.lock_program_funds(&10_000);
+    client.update_fee_config(&None, &None, &None, &None, &None, &Some(false));
+    client.lock_program_funds(&10_000);
+    assert_eq!(client.get_remaining_balance(), 19_000);
+    assert_eq!(token_client.balance(&fee_bucket), 1_000);
+    let _ = admin;
+}

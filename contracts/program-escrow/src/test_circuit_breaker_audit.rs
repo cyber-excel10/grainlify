@@ -5,25 +5,10 @@ mod test {
     use soroban_sdk::{
         symbol_short,
         testutils::{Address as _, Events, Ledger},
-        token, vec, Address, Env, IntoVal, String, Symbol,
+        vec, Address, Env, String, Symbol, TryFromVal,
     };
 
-    fn has_topic_pair(
-        env: &Env,
-        topics: &soroban_sdk::Vec<soroban_sdk::Val>,
-        first: Symbol,
-        second: Symbol,
-    ) -> bool {
-        if topics.len() < 2 {
-            return false;
-        }
-
-        let expected = vec![env, first.into_val(env), second.into_val(env)];
-        *topics == expected
-    }
-
     fn setup_test(env: &Env) -> (ProgramEscrowContractClient, Address) {
-        env.mock_all_auths();
         let contract_id = env.register_contract(None, ProgramEscrowContract);
         let client = ProgramEscrowContractClient::new(env, &contract_id);
         let admin = Address::generate(env);
@@ -32,18 +17,10 @@ mod test {
         (client, admin)
     }
 
-    fn create_token(env: &Env, admin: &Address, amount: i128) -> Address {
-        let sac = env.register_stellar_asset_contract_v2(admin.clone());
-        let token_address = sac.address();
-        let token_admin = token::StellarAssetClient::new(env, &token_address);
-        token_admin.mint(admin, &amount);
-        token_address
-    }
-
     #[test]
     fn test_circuit_healthy_state_passes_verification() {
         let env = Env::default();
-        let (client, admin) = setup_test(&env);
+        let (client, _admin) = setup_test(&env);
         env.as_contract(&client.address, || {
             // Initially Closed and healthy
             assert!(error_recovery::verify_circuit_invariants(&env));
@@ -53,7 +30,7 @@ mod test {
     #[test]
     fn test_circuit_tamper_open_without_timestamp() {
         let env = Env::default();
-        let (client, admin) = setup_test(&env);
+        let (client, _admin) = setup_test(&env);
         env.as_contract(&client.address, || {
             // TAMPER: Force state to Open but leave opened_at as 0
             env.storage()
@@ -87,7 +64,7 @@ mod test {
     #[test]
     fn test_circuit_tamper_closed_with_threshold_exceeded() {
         let env = Env::default();
-        let (client, admin) = setup_test(&env);
+        let (client, _admin) = setup_test(&env);
         env.as_contract(&client.address, || {
             // TAMPER: Force failure_count to 10 (threshold is 3) but keep state Closed
             env.storage()
@@ -121,7 +98,7 @@ mod test {
     #[test]
     fn test_circuit_tamper_half_open_with_success_exceeded() {
         let env = Env::default();
-        let (client, admin) = setup_test(&env);
+        let (client, _admin) = setup_test(&env);
         env.as_contract(&client.address, || {
             // TAMPER: Force success_count to 5 (threshold is 1) but keep state HalfOpen
             env.storage()
@@ -155,7 +132,7 @@ mod test {
     #[test]
     fn test_circuit_blocking_when_open() {
         let env = Env::default();
-        let (client, admin) = setup_test(&env);
+        let (client, _admin) = setup_test(&env);
 
         // Set a non-zero timestamp so OpenedAt is valid (invariant check fails if 0)
         env.ledger().set_timestamp(100);
@@ -181,12 +158,14 @@ mod test {
         let circuit_events = env.events().all();
         let ev = circuit_events.get(circuit_events.len() - 1).unwrap();
         assert_eq!(ev.0, client.address);
-        assert!(has_topic_pair(
-            &env,
-            &ev.1,
-            symbol_short!("circuit"),
+        assert_eq!(
+            Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap(),
+            symbol_short!("circuit")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap(),
             symbol_short!("cb_adm")
-        ));
+        );
     }
 
     #[test]
@@ -207,12 +186,12 @@ mod test {
         // Check for cb_reset event
         let mut found = false;
         for ev in circuit_events.iter() {
-            if has_topic_pair(
-                &env,
-                &ev.1,
-                symbol_short!("circuit"),
-                symbol_short!("cb_reset"),
-            ) {
+            if ev.1.len() >= 2
+                && Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap()
+                    == symbol_short!("circuit")
+                && Symbol::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap()
+                    == symbol_short!("cb_reset")
+            {
                 found = true;
                 break;
             }
@@ -229,38 +208,43 @@ mod test {
 
         let circuit_events = env.events().all();
         let ev = circuit_events.get(circuit_events.len() - 1).unwrap();
-        assert!(has_topic_pair(
-            &env,
-            &ev.1,
-            symbol_short!("circuit"),
+        assert_eq!(
+            Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap(),
+            symbol_short!("circuit")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap(),
             symbol_short!("cb_cfg")
-        ));
+        );
     }
 
     #[test]
     fn test_audit_rate_limit_config_update() {
         let env = Env::default();
-        let (client, admin) = setup_test(&env);
+        let (client, _admin) = setup_test(&env);
 
         client.update_rate_limit_config(&3600u64, &50u32, &120u64);
 
         let events = env.events().all();
         let ev = events.get(events.len() - 1).unwrap();
-        assert!(has_topic_pair(
-            &env,
-            &ev.1,
-            symbol_short!("rate_lim"),
+        assert_eq!(
+            Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap(),
+            symbol_short!("rate_lim")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap(),
             symbol_short!("update")
-        ));
+        );
     }
 
     #[test]
     fn test_payout_respects_circuit_breaker() {
         let env = Env::default();
+        env.mock_all_auths();
         let (client, admin) = setup_test(&env);
 
         let user = Address::generate(&env);
-        let token_addr = create_token(&env, &admin, 1_000i128);
+        let token_addr = Address::generate(&env); // Mock token
 
         // Initialize program
         client.init_program(
@@ -285,11 +269,12 @@ mod test {
     #[test]
     fn test_batch_payout_respects_circuit_breaker() {
         let env = Env::default();
+        env.mock_all_auths();
         let (client, admin) = setup_test(&env);
 
         let user1 = Address::generate(&env);
         let user2 = Address::generate(&env);
-        let token_addr = create_token(&env, &admin, 1_000i128);
+        let token_addr = Address::generate(&env);
 
         client.init_program(
             &String::from_str(&env, "prog1"),
