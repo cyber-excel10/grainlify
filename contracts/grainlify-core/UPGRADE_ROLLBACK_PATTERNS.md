@@ -5,6 +5,7 @@ This document describes the upgrade and rollback patterns implemented in the Gra
 ## Overview
 
 The Grainlify Core contract supports secure WASM upgrades with the ability to rollback to previous versions. This is critical for:
+
 - Bug fixes in production
 - Feature rollouts
 - Emergency rollbacks
@@ -29,6 +30,7 @@ contract.upgrade(&wasm_hash_v1);  // Rollback using same hash
 ### Version Tracking
 
 The contract tracks:
+
 1. **Current Version** (`DataKey::Version`) - The active version number
 2. **Previous Version** (`DataKey::PreviousVersion`) - The version before the last upgrade
 3. **Migration State** (`DataKey::MigrationState`) - State migration metadata
@@ -36,6 +38,7 @@ The contract tracks:
 ### Instance Storage Persistence
 
 All instance storage persists across WASM upgrades:
+
 - Admin address
 - Version numbers
 - Migration state
@@ -69,6 +72,12 @@ client.init(&signers, &2);  // 2 of 3 threshold
 
 // Propose upgrade
 let proposal_id = client.propose_upgrade(&signer1, &new_wasm_hash);
+
+// Review the persisted proposal metadata before approvals.
+let proposal = client.get_upgrade_proposal(&proposal_id).unwrap();
+assert_eq!(proposal.proposal_id, proposal_id);
+assert_eq!(proposal.proposer, Some(signer1.clone()));
+assert_eq!(proposal.wasm_hash, new_wasm_hash);
 
 // Collect approvals
 client.approve_upgrade(&proposal_id, &signer1);
@@ -118,6 +127,11 @@ client.set_version(&prev_version);
 ```rust
 // Propose rollback to previous WASM
 let rollback_proposal = client.propose_upgrade(&signer1, &previous_wasm_hash);
+
+// Proposal ids are monotonic and remain stable across the full lifecycle.
+let rollback_state = client.get_upgrade_proposal(&rollback_proposal).unwrap();
+assert_eq!(rollback_state.proposer, Some(signer1.clone()));
+assert_eq!(rollback_state.wasm_hash, previous_wasm_hash);
 
 // Fast-track approvals for emergency
 client.approve_upgrade(&rollback_proposal, &signer1);
@@ -195,15 +209,17 @@ The following scenarios are documented and should be tested in integration envir
 ### Before Upgrade
 
 1. **Test on Testnet**
+
    ```bash
    # Deploy to testnet
    stellar contract deploy --wasm new_version.wasm --network testnet
-   
+
    # Test thoroughly
    stellar contract invoke --id CONTRACT_ID --network testnet -- upgrade --new_wasm_hash HASH
    ```
 
 2. **Save Current WASM Hash**
+
    ```rust
    // Store this in a secure location
    let rollback_hash = current_wasm_hash;
@@ -235,16 +251,36 @@ The following scenarios are documented and should be tested in integration envir
 ### After Upgrade
 
 1. **Run Health Checks**
+
    ```rust
    let health = client.health_check();
    assert!(health.is_healthy);
    ```
 
 2. **Monitor Analytics**
+
    ```rust
    let analytics = client.get_analytics();
    // Check error rates, operation counts
    ```
+
+### Monitoring Field Meanings
+
+`health_check()` returns a bounded, read-only status object for operators:
+
+- `is_healthy`: `true` only when the contract's configuration and monitoring invariants hold.
+- `last_operation`: Ledger timestamp of the last tracked operation. Returns `0` before any tracked operation exists.
+- `total_operations`: Total tracked operations, including tracked failures.
+- `contract_version`: Semantic version string derived from the contract's stored version. Returns `0.0.0` before initialization.
+
+`get_analytics()` returns bounded aggregate counters for dashboards:
+
+- `operation_count`: Total tracked operations.
+- `unique_users`: Distinct tracked callers retained in the bounded monitoring index. This count saturates once the tracked-user cap is reached, so it remains storage-safe on-chain.
+- `error_count`: Total tracked failed operations.
+- `error_rate`: Failure rate in basis points where `10000 == 100%` and `250 == 2.5%`.
+
+These views are intentionally panic-free on empty state so monitoring systems can poll a deployed-but-not-yet-initialized contract safely.
 
 3. **Keep Rollback Ready**
    - Maintain previous WASM hash for 24-48 hours
@@ -287,14 +323,14 @@ stellar contract invoke \
 
 # 2. Fast-track approvals
 stellar contract invoke --id CONTRACT_ID --source SIGNER1_KEY \
-  -- approve_upgrade --proposal_id 0 --signer SIGNER1_ADDR
+   -- approve_upgrade --proposal_id "$PROPOSAL_ID" --signer SIGNER1_ADDR
 
 stellar contract invoke --id CONTRACT_ID --source SIGNER2_KEY \
-  -- approve_upgrade --proposal_id 0 --signer SIGNER2_ADDR
+   -- approve_upgrade --proposal_id "$PROPOSAL_ID" --signer SIGNER2_ADDR
 
 # 3. Execute
 stellar contract invoke --id CONTRACT_ID \
-  -- execute_upgrade --proposal_id 0
+   -- execute_upgrade --proposal_id "$PROPOSAL_ID"
 ```
 
 ## Version History

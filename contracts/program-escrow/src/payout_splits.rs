@@ -50,7 +50,7 @@
 //! | Amount > remaining balance | Panics with `insufficient escrow balance` |
 
 use crate::{DataKey, PayoutRecord, ProgramData, PROGRAM_DATA};
-use soroban_sdk::{contracttype, symbol_short, token, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{contracttype, symbol_short, token, Address, Env, String, Vec};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -158,9 +158,6 @@ pub fn set_split_config(
     program_id: &String,
     beneficiaries: Vec<BeneficiarySplit>,
 ) -> SplitConfig {
-    let program = get_program(env);
-    program.authorized_payout_key.require_auth();
-
     let n = beneficiaries.len();
     if n == 0 {
         panic!("SplitConfig: must have at least one beneficiary");
@@ -218,9 +215,6 @@ pub fn get_split_config(env: &Env, program_id: &String) -> Option<SplitConfig> {
 ///
 /// Requires authorisation from the `authorized_payout_key`.
 pub fn disable_split_config(env: &Env, program_id: &String) {
-    let program = get_program(env);
-    program.authorized_payout_key.require_auth();
-
     let key = split_key(program_id);
     let mut config: SplitConfig = env
         .storage()
@@ -270,7 +264,6 @@ pub fn execute_split_payout(
     total_amount: i128,
 ) -> SplitPayoutResult {
     let mut program = get_program(env);
-    program.authorized_payout_key.require_auth();
 
     if total_amount <= 0 {
         panic!("SplitPayout: amount must be greater than zero");

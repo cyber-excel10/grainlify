@@ -125,6 +125,8 @@ fn test_set_token_fee_config_invalid_lock_rate_rejected() {
         &s.token_id,
         &5_001, // above MAX_FEE_RATE
         &0,
+        &0,
+        &0,
         &s.fee_recipient,
         &true,
     );
@@ -134,9 +136,15 @@ fn test_set_token_fee_config_invalid_lock_rate_rejected() {
 #[test]
 fn test_set_token_fee_config_invalid_release_rate_rejected() {
     let s = Suite::new();
-    let result =
-        s.client
-            .try_set_token_fee_config(&s.token_id, &0, &10_001, &s.fee_recipient, &true);
+    let result = s.client.try_set_token_fee_config(
+        &s.token_id,
+        &0,
+        &10_001,
+        &0,
+        &0,
+        &s.fee_recipient,
+        &true,
+    );
     assert_eq!(result.unwrap_err().unwrap(), Error::InvalidFeeRate);
 }
 
@@ -144,7 +152,7 @@ fn test_set_token_fee_config_invalid_release_rate_rejected() {
 fn test_set_token_fee_config_zero_rates_accepted() {
     let s = Suite::new();
     s.client
-        .set_token_fee_config(&s.token_id, &0, &0, &s.fee_recipient, &false);
+        .set_token_fee_config(&s.token_id, &0, &0, &0, &0, &s.fee_recipient, &false);
     let cfg = s.client.get_token_fee_config(&s.token_id).unwrap();
     assert_eq!(cfg.lock_fee_rate, 0);
     assert_eq!(cfg.release_fee_rate, 0);
@@ -155,7 +163,7 @@ fn test_set_token_fee_config_zero_rates_accepted() {
 fn test_set_token_fee_config_stores_correctly() {
     let s = Suite::new();
     s.client
-        .set_token_fee_config(&s.token_id, &200, &100, &s.fee_recipient, &true);
+        .set_token_fee_config(&s.token_id, &200, &100, &0, &0, &s.fee_recipient, &true);
     let cfg = s.client.get_token_fee_config(&s.token_id).unwrap();
     assert_eq!(cfg.lock_fee_rate, 200);
     assert_eq!(cfg.release_fee_rate, 100);
@@ -171,7 +179,7 @@ fn test_lock_fee_collected_correctly() {
     let s = Suite::new();
     // 2% lock fee
     s.client
-        .set_token_fee_config(&s.token_id, &200, &0, &s.fee_recipient, &true);
+        .set_token_fee_config(&s.token_id, &200, &0, &0, &0, &s.fee_recipient, &true);
 
     let gross = 1_000_000i128;
     s.fund_depositor(gross);
@@ -199,7 +207,7 @@ fn test_lock_fee_collected_correctly() {
 fn test_lock_no_fee_when_rate_zero() {
     let s = Suite::new();
     s.client
-        .set_token_fee_config(&s.token_id, &0, &0, &s.fee_recipient, &true);
+        .set_token_fee_config(&s.token_id, &0, &0, &0, &0, &s.fee_recipient, &true);
 
     let amount = 500_000i128;
     s.fund_depositor(amount);
@@ -215,7 +223,7 @@ fn test_lock_no_fee_when_rate_zero() {
 fn test_lock_no_fee_when_disabled() {
     let s = Suite::new();
     s.client
-        .set_token_fee_config(&s.token_id, &500, &500, &s.fee_recipient, &false);
+        .set_token_fee_config(&s.token_id, &500, &500, &0, &0, &s.fee_recipient, &false);
 
     let amount = 100_000i128;
     s.fund_depositor(amount);
@@ -236,7 +244,7 @@ fn test_dust_deposit_fee_never_zero_with_nonzero_rate() {
     let s = Suite::new();
     // 1 bp lock fee
     s.client
-        .set_token_fee_config(&s.token_id, &1, &0, &s.fee_recipient, &true);
+        .set_token_fee_config(&s.token_id, &1, &0, &0, &0, &s.fee_recipient, &true);
 
     // Deposit of 1 stroop: floor would give 0 fee, ceil must give 1
     s.fund_depositor(2); // need at least 2 so net > 0 after 1-stroop fee
@@ -257,7 +265,7 @@ fn test_fee_cannot_consume_entire_principal() {
     let s = Suite::new();
     // 50% lock fee on 1 stroop deposit → fee=1, net=0 → InvalidAmount
     s.client
-        .set_token_fee_config(&s.token_id, &5_000, &0, &s.fee_recipient, &true);
+        .set_token_fee_config(&s.token_id, &5_000, &0, &0, &0, &s.fee_recipient, &true);
 
     s.fund_depositor(1);
     let result = s.client.try_lock_funds(&s.depositor, &1, &1, &s.deadline());
@@ -279,13 +287,15 @@ fn test_per_token_config_overrides_global() {
     s.client.update_fee_config(
         &Some(100i128),
         &Some(0i128),
+        &None,
+        &None,
         &Some(s.admin.clone()),
         &Some(true),
     );
 
     // Per-token: 3% lock fee to fee_recipient
     s.client
-        .set_token_fee_config(&s.token_id, &300, &0, &s.fee_recipient, &true);
+        .set_token_fee_config(&s.token_id, &300, &0, &0, &0, &s.fee_recipient, &true);
 
     let amount = 100_000i128;
     s.fund_depositor(amount);
@@ -309,6 +319,8 @@ fn test_global_fee_used_when_no_token_config() {
     s.client.update_fee_config(
         &Some(100i128),
         &Some(0i128),
+        &None,
+        &None,
         &Some(s.fee_recipient.clone()),
         &Some(true),
     );
@@ -328,7 +340,7 @@ fn test_release_fee_collected_correctly() {
     let s = Suite::new();
     // 1% release fee
     s.client
-        .set_token_fee_config(&s.token_id, &0, &100, &s.fee_recipient, &true);
+        .set_token_fee_config(&s.token_id, &0, &100, &0, &0, &s.fee_recipient, &true);
 
     let amount = 200_000i128;
     s.fund_depositor(amount);
@@ -348,7 +360,7 @@ fn test_release_fee_collected_correctly() {
 fn test_release_no_fee_when_rate_zero() {
     let s = Suite::new();
     s.client
-        .set_token_fee_config(&s.token_id, &0, &0, &s.fee_recipient, &true);
+        .set_token_fee_config(&s.token_id, &0, &0, &0, &0, &s.fee_recipient, &true);
 
     let amount = 50_000i128;
     s.fund_depositor(amount);
@@ -373,7 +385,7 @@ fn test_get_token_fee_config_returns_none_when_unset() {
 fn test_get_token_fee_config_returns_some_when_set() {
     let s = Suite::new();
     s.client
-        .set_token_fee_config(&s.token_id, &150, &75, &s.fee_recipient, &true);
+        .set_token_fee_config(&s.token_id, &150, &75, &0, &0, &s.fee_recipient, &true);
     let cfg = s.client.get_token_fee_config(&s.token_id).unwrap();
     assert_eq!(cfg.lock_fee_rate, 150);
     assert_eq!(cfg.release_fee_rate, 75);

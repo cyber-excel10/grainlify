@@ -445,6 +445,7 @@ fn test_claim_cancellation_restores_refund_eligibility() {
     assert_eq!(setup.token.balance(&setup.depositor), 10_000_000);
 }
 
+/// After the bounty deadline, a pending claim still blocks refund until explicitly resolved.
 #[test]
 fn test_expiry_does_not_bypass_active_dispute() {
     let s = TestSetup::new();
@@ -461,9 +462,37 @@ fn test_expiry_does_not_bypass_active_dispute() {
 
     s.env.ledger().set_timestamp(deadline + 1);
 
-    let escrow_info = s.escrow.get_escrow_info(&bounty_id);
+    let res = s.escrow.try_refund(&bounty_id);
+    assert!(res.is_err());
+    assert_eq!(res.unwrap_err().unwrap(), Error::ClaimPending);
 
-    let _ = escrow_info;
+    let escrow_info = s.escrow.get_escrow_info(&bounty_id);
+    assert_eq!(escrow_info.status, EscrowStatus::Locked);
+    assert_eq!(s.token.balance(&s.escrow.address), amount);
+}
+
+/// No second payout path: once released to contributor, refund must fail.
+#[test]
+fn test_no_refund_after_successful_release() {
+    let s = TestSetup::new();
+    let bounty_id = 107u64;
+    let amount = 800i128;
+    let now = s.env.ledger().timestamp();
+    let deadline = now + 2_000;
+
+    s.escrow
+        .lock_funds(&s.depositor, &bounty_id, &amount, &deadline);
+    s.escrow.release_funds(&bounty_id, &s.contributor);
+
+    assert_eq!(
+        s.escrow.get_escrow_info(&bounty_id).status,
+        EscrowStatus::Released
+    );
+
+    s.env.ledger().set_timestamp(deadline + 1);
+    let res = s.escrow.try_refund(&bounty_id);
+    assert!(res.is_err());
+    assert_eq!(res.unwrap_err().unwrap(), Error::FundsNotLocked);
 }
 
 // Dispute opened before deadline → admin cancels claim → refund after deadline.
@@ -648,4 +677,143 @@ fn test_no_dispute_normal_refund_after_deadline() {
     let info = s.escrow.get_escrow_info(&bounty_id);
     assert_eq!(info.status, EscrowStatus::Refunded);
     assert_eq!(s.token.balance(&s.depositor), 10_000_000);
+}
+
+/// Admin-assisted refund: admin approves a refund before the deadline expires.
+/// Verifies the early-refund path works independently of expiry.
+#[test]
+fn test_admin_assisted_refund_before_deadline() {
+    let s = TestSetup::new();
+    let bounty_id = 200u64;
+    let amount = 2_000i128;
+    let now = s.env.ledger().timestamp();
+    let deadline = now + 1_000;
+
+    s.escrow
+        .lock_funds(&s.depositor, &bounty_id, &amount, &deadline);
+
+    // Admin approves refund before deadline
+    s.escrow
+        .approve_refund(&bounty_id, &amount, &s.depositor, &crate::RefundMode::Full);
+
+    // Refund executes even though deadline has not passed
+    s.escrow.refund(&bounty_id);
+
+    let info = s.escrow.get_escrow_info(&bounty_id);
+    assert_eq!(info.status, crate::EscrowStatus::Refunded);
+    assert_eq!(s.token.balance(&s.depositor), 10_000_000);
+    assert_eq!(s.token.balance(&s.escrow.address), 0);
+}
+
+/// Expiry-based refund: no admin approval needed once the deadline passes.
+/// Funds return to the original depositor.
+#[test]
+fn test_expiry_refund_returns_to_depositor() {
+    let s = TestSetup::new();
+    let bounty_id = 201u64;
+    let amount = 3_000i128;
+    let now = s.env.ledger().timestamp();
+    let deadline = now + 500;
+
+    s.escrow
+        .lock_funds(&s.depositor, &bounty_id, &amount, &deadline);
+
+    // Advance past deadline
+    s.env.ledger().set_timestamp(deadline + 1);
+
+    s.escrow.refund(&bounty_id);
+
+    let info = s.escrow.get_escrow_info(&bounty_id);
+    assert_eq!(info.status, crate::EscrowStatus::Refunded);
+    assert_eq!(s.token.balance(&s.depositor), 10_000_000);
+    assert_eq!(s.token.balance(&s.escrow.address), 0);
+}
+
+/// Pending claim blocks refund even after deadline; admin must cancel first.
+/// This is the security-critical path: expiry alone cannot bypass a dispute.
+#[test]
+fn test_expiry_alone_cannot_bypass_pending_claim() {
+    let s = TestSetup::new();
+    let bounty_id = 202u64;
+    let amount = 1_000i128;
+    let now = s.env.ledger().timestamp();
+    let deadline = now + 300;
+
+    s.escrow.set_claim_window(&200);
+    s.escrow
+        .lock_funds(&s.depositor, &bounty_id, &amount, &deadline);
+    s.escrow
+        .authorize_claim(&bounty_id, &s.contributor, &DisputeReason::Other);
+
+    // Jump past both the claim window and the deadline
+    s.env.ledger().set_timestamp(deadline + 500);
+
+    // Refund must be blocked
+    let res = s.escrow.try_refund(&bounty_id);
+    assert!(res.is_err());
+    assert_eq!(res.unwrap_err().unwrap(), Error::ClaimPending);
+
+    // Admin cancels the stale claim, then refund succeeds
+    s.escrow
+        .cancel_pending_claim(&bounty_id, &DisputeOutcome::CancelledByAdmin);
+    s.escrow.refund(&bounty_id);
+
+    let info = s.escrow.get_escrow_info(&bounty_id);
+    assert_eq!(info.status, crate::EscrowStatus::Refunded);
+    assert_eq!(s.token.balance(&s.depositor), 10_000_000);
+}
+
+/// Admin-approved partial refund before deadline, then expiry-based full refund
+/// for the remainder. Verifies the PartiallyRefunded → Refunded transition.
+#[test]
+fn test_partial_then_expiry_full_refund() {
+    let s = TestSetup::new();
+    let bounty_id = 203u64;
+    let amount = 4_000i128;
+    let now = s.env.ledger().timestamp();
+    let deadline = now + 800;
+
+    s.escrow
+        .lock_funds(&s.depositor, &bounty_id, &amount, &deadline);
+
+    // Admin approves a partial refund of 1500 before deadline
+    s.escrow
+        .approve_refund(&bounty_id, &1500, &s.depositor, &crate::RefundMode::Partial);
+    s.escrow.refund(&bounty_id);
+
+    let info = s.escrow.get_escrow_info(&bounty_id);
+    assert_eq!(info.status, crate::EscrowStatus::PartiallyRefunded);
+    assert_eq!(info.remaining_amount, 2500);
+
+    // Advance past deadline; remaining 2500 refunded automatically
+    s.env.ledger().set_timestamp(deadline + 1);
+    s.escrow.refund(&bounty_id);
+
+    let info = s.escrow.get_escrow_info(&bounty_id);
+    assert_eq!(info.status, crate::EscrowStatus::Refunded);
+    assert_eq!(info.remaining_amount, 0);
+    assert_eq!(s.token.balance(&s.depositor), 10_000_000);
+    assert_eq!(s.token.balance(&s.escrow.address), 0);
+
+    // History has two entries
+    let history = s.escrow.get_refund_history(&bounty_id);
+    assert_eq!(history.len(), 2);
+}
+
+/// Refund on a released escrow returns FundsNotLocked.
+#[test]
+fn test_refund_after_release_fails() {
+    let s = TestSetup::new();
+    let bounty_id = 204u64;
+    let amount = 500i128;
+    let now = s.env.ledger().timestamp();
+    let deadline = now + 1_000;
+
+    s.escrow
+        .lock_funds(&s.depositor, &bounty_id, &amount, &deadline);
+    s.escrow.release_funds(&bounty_id, &s.contributor);
+
+    let res = s.escrow.try_refund(&bounty_id);
+    assert!(res.is_err());
+    assert_eq!(res.unwrap_err().unwrap(), Error::FundsNotLocked);
 }

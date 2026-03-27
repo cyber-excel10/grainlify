@@ -1,12 +1,16 @@
 extern crate std;
 
 use soroban_sdk::{
+    vec,
     xdr::{FromXdr, Hash, ScAddress, ToXdr},
-    Address, BytesN, Env, IntoVal, String as SdkString, Symbol, TryFromVal, Val,
+    Address, BytesN, Env, IntoVal, String as SdkString, Symbol, TryFromVal, Val, Vec,
 };
 
+use crate::commit_reveal::Commitment;
 use crate::governance::*;
 use crate::monitoring::*;
+use crate::multisig::MultiSigConfig;
+use crate::nonce::NonceKey;
 use crate::*;
 
 mod serialization_goldens {
@@ -78,6 +82,7 @@ fn serialization_compatibility_public_types_and_events() {
         votes_against: 5,
         votes_abstain: 1,
         total_votes: 3,
+        stake_amount: 100,
     };
 
     let governance_config = GovernanceConfig {
@@ -87,6 +92,7 @@ fn serialization_compatibility_public_types_and_events() {
         approval_threshold: 7000,
         min_proposal_stake: 123,
         voting_scheme: VotingScheme::OnePersonOneVote,
+        governance_token: contract_address(&env, 0x05),
     };
 
     let vote = Vote {
@@ -155,6 +161,48 @@ fn serialization_compatibility_public_types_and_events() {
         error_message: Some(SdkString::from_str(&env, "failed")),
     };
 
+    // Additional types for serialization compatibility
+    let invariant_report = InvariantReport {
+        healthy: true,
+        config_sane: true,
+        metrics_sane: true,
+        admin_set: true,
+        version_set: true,
+        version: 2,
+        operation_count: 100,
+        unique_users: 25,
+        error_count: 3,
+        violation_count: 0,
+    };
+
+    let signer1 = contract_address(&env, 0x05);
+    let signer2 = contract_address(&env, 0x06);
+    let core_config_snapshot = CoreConfigSnapshot {
+        id: 1,
+        timestamp: 17,
+        admin: Some(admin.clone()),
+        version: 2,
+        previous_version: Some(1),
+        multisig_threshold: 2,
+        multisig_signers: vec![&env, signer1.clone(), signer2.clone()],
+    };
+
+    let multisig_config = MultiSigConfig {
+        signers: vec![&env, signer1.clone(), signer2.clone()],
+        threshold: 2,
+    };
+
+    let commitment_hash = BytesN::<32>::from_array(&env, &[0x33; 32]);
+    let commitment = Commitment {
+        hash: commitment_hash.clone(),
+        creator: admin.clone(),
+        timestamp: 18,
+        expiry: Some(1000),
+    };
+
+    let nonce_key_signer = NonceKey::Signer(admin.clone());
+    let nonce_key_domain = NonceKey::SignerWithDomain(admin.clone(), Symbol::new(&env, "upgrade"));
+
     let samples: &[(&str, Val)] = &[
         (
             "ProposalStatus::Active",
@@ -176,11 +224,27 @@ fn serialization_compatibility_public_types_and_events() {
         ("PerformanceStats", perf_stats.clone().into_val(&env)),
         ("MigrationState", migration_state.clone().into_val(&env)),
         ("MigrationEvent", migration_event.clone().into_val(&env)),
+        ("InvariantReport", invariant_report.clone().into_val(&env)),
+        (
+            "CoreConfigSnapshot",
+            core_config_snapshot.clone().into_val(&env),
+        ),
+        ("MultiSigConfig", multisig_config.clone().into_val(&env)),
+        ("Commitment", commitment.clone().into_val(&env)),
+        ("NonceKey::Signer", nonce_key_signer.clone().into_val(&env)),
+        (
+            "NonceKey::SignerWithDomain",
+            nonce_key_domain.clone().into_val(&env),
+        ),
     ];
 
     assert_roundtrip(&env, &ProposalStatus::Active);
     assert_roundtrip(&env, &VoteType::For);
     assert_roundtrip(&env, &migration_state);
+    assert_roundtrip(&env, &invariant_report);
+    assert_roundtrip(&env, &core_config_snapshot);
+    assert_roundtrip(&env, &multisig_config);
+    assert_roundtrip(&env, &commitment);
 
     let mut computed: std::vec::Vec<(&str, std::string::String)> = std::vec::Vec::new();
     for (name, val) in samples {

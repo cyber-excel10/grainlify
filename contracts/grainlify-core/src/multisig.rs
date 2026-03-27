@@ -1,3 +1,8 @@
+//! Multisig approval engine used by Grainlify upgrade flows.
+//!
+//! Proposal identifiers are allocated from a monotonic counter and are treated
+//! as stable handles for subsequent approval and execution steps.
+
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
 
 /// =======================
@@ -8,6 +13,7 @@ enum DataKey {
     Config,
     Proposal(u64),
     ProposalCounter,
+    Paused,
 }
 
 /// =======================
@@ -16,7 +22,9 @@ enum DataKey {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MultiSigConfig {
+    /// Ordered signer set authorized to create and approve proposals.
     pub signers: Vec<Address>,
+    /// Minimum number of distinct signer approvals required for execution.
     pub threshold: u32,
 }
 
@@ -26,7 +34,9 @@ pub struct MultiSigConfig {
 #[contracttype]
 #[derive(Clone)]
 pub struct Proposal {
+    /// Signers that have approved this proposal.
     pub approvals: Vec<Address>,
+    /// Whether the proposal has already been consumed by execution.
     pub executed: bool,
 }
 
@@ -38,9 +48,12 @@ pub enum MultiSigError {
     NotSigner,
     AlreadyApproved,
     ProposalNotFound,
+    ProposalAlreadyExists,
     AlreadyExecuted,
     ThresholdNotMet,
     InvalidThreshold,
+    ContractPaused,
+    StateInconsistent,
 }
 
 /// =======================
@@ -49,7 +62,7 @@ pub enum MultiSigError {
 pub struct MultiSig;
 
 impl MultiSig {
-    /// Initialize multisig configuration
+    /// Initializes the signer set and execution threshold.
     pub fn init(env: &Env, signers: Vec<Address>, threshold: u32) {
         if threshold == 0 || threshold > signers.len() {
             panic!("{:?}", MultiSigError::InvalidThreshold);
@@ -62,7 +75,7 @@ impl MultiSig {
             .set(&DataKey::ProposalCounter, &0u64);
     }
 
-    /// Create a new proposal
+    /// Creates a new proposal and returns its stable identifier.
     pub fn propose(env: &Env, proposer: Address) -> u64 {
         proposer.require_auth();
 
@@ -82,6 +95,10 @@ impl MultiSig {
             executed: false,
         };
 
+        if env.storage().instance().has(&DataKey::Proposal(counter)) {
+            panic!("{:?}", MultiSigError::ProposalAlreadyExists);
+        }
+
         env.storage()
             .instance()
             .set(&DataKey::Proposal(counter), &proposal);
@@ -94,7 +111,7 @@ impl MultiSig {
         counter
     }
 
-    /// Approve an existing proposal
+    /// Records a signer approval for an existing proposal.
     pub fn approve(env: &Env, proposal_id: u64, signer: Address) {
         signer.require_auth();
 
@@ -121,15 +138,44 @@ impl MultiSig {
             .publish((symbol_short!("approved"),), (proposal_id, signer));
     }
 
-    /// Check if proposal is executable
+    /// Returns whether a proposal currently satisfies the execution threshold.
     pub fn can_execute(env: &Env, proposal_id: u64) -> bool {
+        // First check if contract is in a healthy state
+        if Self::is_contract_paused(env) || Self::is_state_inconsistent(env) {
+            return false;
+        }
+
         let config = Self::get_config(env);
         let proposal = Self::get_proposal(env, proposal_id);
 
         !proposal.executed && proposal.approvals.len() >= config.threshold
     }
 
-    /// Mark proposal as executed (caller executes action externally)
+    pub fn is_contract_paused(env: &Env) -> bool {
+        env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    }
+
+    pub fn pause(env: &Env, signer: Address) {
+        signer.require_auth();
+        let config = Self::get_config(env);
+        Self::assert_signer(&config, &signer);
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.events().publish((symbol_short!("paused"),), signer);
+    }
+
+    pub fn unpause(env: &Env, signer: Address) {
+        signer.require_auth();
+        let config = Self::get_config(env);
+        Self::assert_signer(&config, &signer);
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish((symbol_short!("unpaused"),), signer);
+    }
+
+    pub fn is_state_inconsistent(_env: &Env) -> bool {
+        false
+    }
+
+    /// Marks a proposal as executed after the guarded action succeeds.
     pub fn mark_executed(env: &Env, proposal_id: u64) {
         let mut proposal = Self::get_proposal(env, proposal_id);
 
@@ -151,12 +197,50 @@ impl MultiSig {
             .publish((symbol_short!("executed"),), proposal_id);
     }
 
-    /// Gets current multisig config if initialized.
+    /// Pauses multisig-protected execution paths.
+    pub fn pause(env: &Env, signer: Address) {
+        signer.require_auth();
+
+        let config = Self::get_config(env);
+        Self::assert_signer(&config, &signer);
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.events().publish((symbol_short!("paused"),), signer);
+    }
+
+    /// Unpauses multisig-protected execution paths.
+    pub fn unpause(env: &Env, signer: Address) {
+        signer.require_auth();
+
+        let config = Self::get_config(env);
+        Self::assert_signer(&config, &signer);
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish((symbol_short!("unpause"),), signer);
+    }
+
+    /// Returns whether multisig execution is paused.
+    pub fn is_contract_paused(env: &Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Returns true if the stored multisig configuration is invalid.
+    pub fn is_state_inconsistent(env: &Env) -> bool {
+        match Self::get_config_opt(env) {
+            Some(config) => config.threshold == 0 || config.threshold > config.signers.len() as u32,
+            None => false,
+        }
+    }
+
+    /// Returns the current multisig configuration, if initialized.
     pub fn get_config_opt(env: &Env) -> Option<MultiSigConfig> {
         env.storage().instance().get(&DataKey::Config)
     }
 
-    /// Sets multisig config directly (used by controlled restore operations).
+    /// Sets the multisig configuration directly for controlled restore flows.
     pub fn set_config(env: &Env, config: MultiSigConfig) {
         if config.threshold == 0 || config.threshold > config.signers.len() as u32 {
             panic!("{:?}", MultiSigError::InvalidThreshold);
@@ -164,9 +248,48 @@ impl MultiSig {
         env.storage().instance().set(&DataKey::Config, &config);
     }
 
-    /// Clears multisig config (used by controlled restore operations).
+    /// Clears the multisig configuration for controlled restore flows.
     pub fn clear_config(env: &Env) {
         env.storage().instance().remove(&DataKey::Config);
+    }
+
+    /// Pause multisig-governed execution paths.
+    pub fn pause(env: &Env, signer: Address) {
+        signer.require_auth();
+
+        let config = Self::get_config(env);
+        Self::assert_signer(&config, &signer);
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.events().publish((symbol_short!("paused"),), signer);
+    }
+
+    /// Unpause multisig-governed execution paths.
+    pub fn unpause(env: &Env, signer: Address) {
+        signer.require_auth();
+
+        let config = Self::get_config(env);
+        Self::assert_signer(&config, &signer);
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish((symbol_short!("unpause"),), signer);
+    }
+
+    /// Return whether the contract is currently paused.
+    pub fn is_contract_paused(env: &Env) -> bool {
+        env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    }
+
+    /// Return whether the multisig configuration is structurally unsafe.
+    pub fn is_state_inconsistent(env: &Env) -> bool {
+        match Self::get_config_opt(env) {
+            Some(config) => {
+                config.threshold == 0
+                    || config.signers.is_empty()
+                    || config.threshold > config.signers.len()
+            }
+            None => true,
+        }
     }
 
     /// =======================

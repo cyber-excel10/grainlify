@@ -119,3 +119,32 @@ fn test_release_and_refund_allowed_in_maintenance_mode() {
 
     assert_eq!(token.balance(&recipient), 1000);
 }
+
+/// Tests that emergency withdraw is allowed during maintenance mode
+/// This is critical for admin to exit funds when contract is in emergency state
+#[test]
+fn test_emergency_withdraw_allowed_in_maintenance_mode() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, admin, _payout_key, token) = setup_program_with_admin(&env);
+
+    let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token.address);
+    let depositor = Address::generate(&env);
+    token_admin_client.mint(&depositor, &5000);
+    token.transfer(&depositor, &contract.address, &5000);
+
+    // Lock funds BEFORE maintenance mode
+    contract.lock_program_funds(&5000i128);
+
+    // Enable maintenance mode (also need to set lock_paused for emergency_withdraw)
+    contract.set_maintenance_mode(&true);
+    contract.set_paused(&Some(true), &None, &None, &None); // Set lock_paused to enable emergency withdraw
+
+    // Emergency withdraw should succeed during maintenance mode
+    let withdraw_recipient = Address::generate(&env);
+    contract.emergency_withdraw(&withdraw_recipient);
+
+    // Verify all funds were withdrawn
+    assert_eq!(token.balance(&withdraw_recipient), 5000);
+    assert_eq!(token.balance(&contract.address), 0);
+}

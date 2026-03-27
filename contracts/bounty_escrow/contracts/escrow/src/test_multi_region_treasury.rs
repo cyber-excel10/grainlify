@@ -20,9 +20,7 @@
 
 #[cfg(test)]
 mod test_multi_region_treasury {
-    use crate::{
-        BountyEscrowContract, BountyEscrowContractClient, FeeConfig, TreasuryDestination,
-    };
+    use crate::{BountyEscrowContract, BountyEscrowContractClient, TreasuryDestination};
     use soroban_sdk::{testutils::Address as _, token, Address, Env, String, Vec};
 
     // ─── Helpers ────────────────────────────────────────────────────────────
@@ -47,23 +45,6 @@ mod test_multi_region_treasury {
         let client = BountyEscrowContractClient::new(env, &id);
         client.init(admin, token);
         client
-    }
-
-    fn create_treasury_destinations<'a>(
-        env: &'a Env,
-        regions: Vec<(&str, &str, u32)>,
-    ) -> Vec<TreasuryDestination> {
-        let mut destinations = Vec::new(env);
-        for (addr, region, weight) in regions {
-            let address = Address::from_string(&String::from_str(env, addr));
-            let region_str = String::from_str(env, region);
-            destinations.push_back(TreasuryDestination {
-                address,
-                weight,
-                region: region_str,
-            });
-        }
-        destinations
     }
 
     // ─── 1. Treasury destinations configuration tests ───────────────────────
@@ -217,7 +198,7 @@ mod test_multi_region_treasury {
 
         // Configure fee and treasury distribution
         client.set_treasury_distributions(&destinations, &true);
-        client.update_fee_config(&Some(1000), &Some(500), &None, &Some(true)); // 10% lock, 5% release
+        client.update_fee_config(&Some(1000), &Some(500), &None, &None, &None, &Some(true)); // 10% lock, 5% release
 
         // Mint tokens to depositor
         token_minter.mint(&depositor, &1000);
@@ -256,6 +237,8 @@ mod test_multi_region_treasury {
         client.update_fee_config(
             &Some(1000),
             &Some(500),
+            &None,
+            &None,
             &Some(fee_recipient.clone()),
             &Some(true),
         );
@@ -297,7 +280,7 @@ mod test_multi_region_treasury {
         });
 
         client.set_treasury_distributions(&destinations, &true);
-        client.update_fee_config(&Some(1000), &None, &None, &Some(true));
+        client.update_fee_config(&Some(1000), &None, &None, &None, &None, &Some(true));
 
         // Mint and lock
         token_minter.mint(&depositor, &1000);
@@ -341,7 +324,7 @@ mod test_multi_region_treasury {
 
         client.set_treasury_distributions(&destinations, &true);
         // No lock fee, but 5% release fee
-        client.update_fee_config(&Some(0), &Some(500), &None, &Some(true));
+        client.update_fee_config(&Some(0), &Some(500), &None, &None, &None, &Some(true));
 
         // Mint and lock (no lock fee)
         token_minter.mint(&depositor, &1000);
@@ -389,7 +372,7 @@ mod test_multi_region_treasury {
         });
 
         client.set_treasury_distributions(&destinations, &true);
-        client.update_fee_config(&Some(500), &Some(300), &None, &Some(true));
+        client.update_fee_config(&Some(500), &Some(300), &None, &None, &None, &Some(true));
 
         // Verify FeeConfig includes treasury configuration
         let fee_config = client.get_fee_config();

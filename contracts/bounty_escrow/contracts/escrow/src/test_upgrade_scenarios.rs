@@ -6,10 +6,13 @@
 //! fully preserved across a simulated WASM upgrade and that [`upgrade_safety`]
 //! functions behave correctly.
 
-use crate::{upgrade_safety, BountyEscrowContract, BountyEscrowContractClient, EscrowStatus};
+use crate::{
+    upgrade_safety, AnonymousEscrow, BountyEscrowContract, BountyEscrowContractClient, DataKey,
+    EscrowStatus,
+};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    token, Address, Env,
+    token, vec, Address, BytesN, Env,
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -405,4 +408,64 @@ fn test_safety_module_check_count() {
             &env
         ))
     );
+}
+
+/// Storage layout check fails when EscrowIndex contains a dangling bounty id.
+#[test]
+fn test_storage_layout_fails_for_dangling_index_entry() {
+    let (env, client, contract_id) = create_test_env();
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let (token, _token_client, _token_admin_client) = create_token_contract(&env, &token_admin);
+    client.init(&admin, &token);
+
+    env.as_contract(&contract_id, || {
+        let ids = vec![&env, 999u64];
+        env.storage().persistent().set(&DataKey::EscrowIndex, &ids);
+    });
+
+    let report = env.as_contract(&contract_id, || upgrade_safety::simulate_upgrade(&env));
+    assert!(!report.is_safe);
+    assert!(report
+        .errors
+        .iter()
+        .any(|e| e.code == upgrade_safety::safety_codes::STORAGE_LAYOUT));
+}
+
+/// Storage layout check fails when a bounty id exists in both legacy and
+/// anonymous storage variants.
+#[test]
+fn test_storage_layout_fails_for_dual_variant_collision() {
+    let (env, client, contract_id) = create_test_env();
+
+    let admin = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let (token, _token_client, token_admin_client) = create_token_contract(&env, &token_admin);
+
+    client.init(&admin, &token);
+    token_admin_client.mint(&depositor, &10_000);
+    let deadline = env.ledger().timestamp() + 1_000;
+    client.lock_funds(&depositor, &77, &5_000, &deadline);
+
+    let anon = AnonymousEscrow {
+        depositor_commitment: BytesN::from_array(&env, &[7u8; 32]),
+        amount: 5_000,
+        remaining_amount: 5_000,
+        status: EscrowStatus::Locked,
+        deadline,
+        refund_history: vec![&env],
+    };
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::EscrowAnon(77), &anon);
+    });
+
+    let report = env.as_contract(&contract_id, || upgrade_safety::simulate_upgrade(&env));
+    assert!(!report.is_safe);
+    assert!(report
+        .errors
+        .iter()
+        .any(|e| e.code == upgrade_safety::safety_codes::STORAGE_LAYOUT));
 }

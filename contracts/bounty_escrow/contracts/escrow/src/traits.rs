@@ -38,7 +38,7 @@
 //! 2. Add a row to the table above.
 //! 3. Register the contract address in the view-facade via `ViewFacade::register`.
 
-use soroban_sdk::{symbol_short, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 // ============================================================================
 // EscrowInterface
@@ -185,6 +185,8 @@ pub trait FeeInterface {
         env: &Env,
         lock_fee_rate: Option<i128>,
         release_fee_rate: Option<i128>,
+        lock_fixed_fee: Option<i128>,
+        release_fixed_fee: Option<i128>,
         fee_recipient: Option<Address>,
         fee_enabled: Option<bool>,
     ) -> Result<(), crate::Error>;

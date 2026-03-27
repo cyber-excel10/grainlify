@@ -1,27 +1,39 @@
 #![cfg(test)]
 
-//! # Partial Payout Rounding & Small Amount Tests (Issue #457)
+//! # Partial Payout Rounding & Dust Handling Tests (Issue #775)
 //!
 //! This module verifies correct behavior when performing partial payouts with
 //! very small amounts, covering:
 //!
 //! - Releasing minimal amounts (1 unit)
-//! - Releasing amounts that leave tiny remainders
+//! - Releasing amounts that leave tiny remainders (dust)
 //! - Ensuring `remaining_amount` matches expectations at every step
 //! - No over-payment due to rounding
 //! - Contract balance conservation across many partial releases
+//! - Sum invariants: total paid out + remaining always equals original amount
 //!
-//! ## Rounding Assumptions
+//! ## Rounding Rules
 //!
 //! The Soroban token contract uses **integer arithmetic** (i128). There is no
 //! floating-point or fixed-point rounding involved. All amounts are in the
-//! smallest indivisible unit (stroops for XLM). Therefore:
+//! smallest indivisible unit (stroops for XLM). The rounding rules are:
 //!
-//! - `remaining_amount -= payout_amount` is always an **exact** subtraction.
-//! - The only rounding risk comes from *fee calculations* (basis-point
-//!   division), which are tested separately.
-//! - These tests confirm that no dust, off-by-one, or underflow bugs exist in
-//!   the `partial_release` path.
+//! 1. **Exact subtraction**: `remaining_amount -= payout_amount` is always exact.
+//! 2. **No dust creation**: Partial releases never create or destroy tokens.
+//! 3. **Sum invariant**: At any point, `sum(all_payouts) + remaining == original`.
+//! 4. **Floor division for fees**: Fee calculations use floor division (tested separately).
+//!
+//! ## Dust Handling
+//!
+//! "Dust" refers to very small remainder amounts after partial payouts. This
+//! contract handles dust correctly:
+//!
+//! - Any non-zero remainder can be released or refunded.
+//! - No minimum payout threshold exists; even 1-unit payouts are valid.
+//! - Remainders are tracked precisely in `escrow.remaining_amount`.
+//!
+//! These tests confirm that no dust, off-by-one, or underflow bugs exist in
+//! the `partial_release` path.
 
 use super::*;
 use soroban_sdk::{
@@ -710,4 +722,215 @@ fn test_remaining_amounts_sum_equals_contract_balance() {
         s.token.balance(&s.escrow.address)
     );
     assert_eq!(info_a.status, EscrowStatus::Released); // A fully drained
+}
+
+// ===========================================================================
+// 18. Sum invariant: cumulative payouts plus remaining equals original
+// ===========================================================================
+
+/// Verify at every step that sum(payouts) + remaining == original amount.
+/// This is the core sum invariant that must hold across all partial releases.
+#[test]
+fn test_sum_invariant_holds_across_all_payouts() {
+    let s = Setup::new();
+    let original = 1_000_000_i128;
+    s.lock(27, original);
+
+    let payouts = [100_i128, 250, 75, 333, 1, 241];
+    let mut cumulative_paid = 0_i128;
+
+    for payout in payouts {
+        s.escrow.partial_release(&27, &s.contributor, &payout);
+        cumulative_paid += payout;
+
+        let info = s.escrow.get_escrow_info(&27);
+        assert_eq!(
+            cumulative_paid + info.remaining_amount,
+            original,
+            "sum invariant violated after paying {}",
+            cumulative_paid
+        );
+    }
+}
+
+// ===========================================================================
+// 19. Dust remainder: release all but 1, verify dust is retrievable
+// ===========================================================================
+
+/// Create a "dust" scenario by releasing all but 1 unit, then verify the
+/// dust can still be released or refunded.
+#[test]
+fn test_dust_remainder_fully_retrievable() {
+    let s = Setup::new();
+    let amount = 10_000_i128;
+    s.lock(28, amount);
+
+    // Release all but 1 (creating "dust")
+    s.escrow.partial_release(&28, &s.contributor, &(amount - 1));
+
+    let info = s.escrow.get_escrow_info(&28);
+    assert_eq!(info.remaining_amount, 1);
+    assert_eq!(info.status, EscrowStatus::Locked);
+
+    // The dust (1 unit) can still be released
+    s.escrow.partial_release(&28, &s.contributor, &1_i128);
+
+    let info = s.escrow.get_escrow_info(&28);
+    assert_eq!(info.remaining_amount, 0);
+    assert_eq!(info.status, EscrowStatus::Released);
+    assert_eq!(s.token.balance(&s.contributor), amount);
+}
+
+// ===========================================================================
+// 20. Multiple contributors with dust-level payouts
+// ===========================================================================
+
+/// Distribute dust-level amounts (1-3 units each) to many contributors.
+/// Verify no tokens are lost or created.
+#[test]
+fn test_dust_payouts_to_multiple_contributors() {
+    let s = Setup::new();
+    let amount = 20_i128;
+    s.lock(29, amount);
+
+    let contributors: [Address; 10] = core::array::from_fn(|_| Address::generate(&s.env));
+    let payouts = [2_i128, 1, 3, 2, 1, 2, 3, 1, 2, 3]; // sum = 20
+    let mut total_distributed = 0_i128;
+
+    for (i, payout) in payouts.iter().enumerate() {
+        s.escrow.partial_release(&29, &contributors[i], payout);
+        total_distributed += payout;
+        assert_eq!(s.token.balance(&contributors[i]), *payout);
+    }
+
+    assert_eq!(total_distributed, amount);
+
+    let info = s.escrow.get_escrow_info(&29);
+    assert_eq!(info.remaining_amount, 0);
+    assert_eq!(info.status, EscrowStatus::Released);
+    assert_eq!(s.token.balance(&s.escrow.address), 0);
+}
+
+// ===========================================================================
+// 21. Large number division edge case
+// ===========================================================================
+
+/// Test with amounts near the minted limit to ensure no overflow in calculations.
+#[test]
+fn test_large_amount_partial_release_no_overflow() {
+    let s = Setup::new();
+    let large_amount = 5_000_000_000_i128; // 5 billion units (within minted limit)
+    s.lock(30, large_amount);
+
+    // Release in large chunks
+    let chunk = 1_666_666_666_i128;
+    s.escrow.partial_release(&30, &s.contributor, &chunk);
+
+    let info = s.escrow.get_escrow_info(&30);
+    let expected_remaining = large_amount - chunk;
+    assert_eq!(info.remaining_amount, expected_remaining);
+    assert_eq!(
+        s.token.balance(&s.contributor) + info.remaining_amount,
+        large_amount
+    );
+
+    // Release another chunk
+    s.escrow.partial_release(&30, &s.contributor, &chunk);
+
+    let info = s.escrow.get_escrow_info(&30);
+    assert_eq!(info.remaining_amount, large_amount - 2 * chunk);
+
+    // Release the remainder
+    let remainder = large_amount - 2 * chunk;
+    s.escrow.partial_release(&30, &s.contributor, &remainder);
+
+    let info = s.escrow.get_escrow_info(&30);
+    assert_eq!(info.remaining_amount, 0);
+    assert_eq!(info.status, EscrowStatus::Released);
+    assert_eq!(s.token.balance(&s.contributor), large_amount);
+}
+
+// ===========================================================================
+// 22. Alternating small and large payouts
+// ===========================================================================
+
+/// Mix dust-level (1 unit) and large payouts to stress the arithmetic.
+#[test]
+fn test_alternating_dust_and_large_payouts() {
+    let s = Setup::new();
+    let amount = 1_000_000_i128;
+    s.lock(31, amount);
+
+    let payouts = [1_i128, 100_000, 1, 200_000, 1, 300_000, 1, 399_996]; // sum = 1_000_000
+    let mut total = 0_i128;
+
+    for payout in payouts {
+        s.escrow.partial_release(&31, &s.contributor, &payout);
+        total += payout;
+
+        let info = s.escrow.get_escrow_info(&31);
+        assert_eq!(info.remaining_amount, amount - total);
+    }
+
+    assert_eq!(total, amount);
+    let info = s.escrow.get_escrow_info(&31);
+    assert_eq!(info.remaining_amount, 0);
+    assert_eq!(info.status, EscrowStatus::Released);
+}
+
+// ===========================================================================
+// 23. Zero-sum verification across refund and release paths
+// ===========================================================================
+
+/// After partial releases and a refund, verify total distributed equals original.
+/// contributor_received + depositor_refunded == original_amount
+#[test]
+fn test_zero_sum_across_release_and_refund() {
+    let s = Setup::new();
+    let amount = 1000_i128;
+    let deadline = s.lock(32, amount);
+
+    // Partial release 600 to contributor
+    s.escrow.partial_release(&32, &s.contributor, &600_i128);
+    let contributor_received = s.token.balance(&s.contributor);
+    assert_eq!(contributor_received, 600);
+
+    // Advance past deadline and refund the remaining 400
+    s.env.ledger().set_timestamp(deadline + 1);
+
+    let depositor_before_refund = s.token.balance(&s.depositor);
+    s.escrow.refund(&32);
+    let depositor_after_refund = s.token.balance(&s.depositor);
+
+    // Verify: depositor got back exactly 400 (the refunded remainder)
+    let refunded_amount = depositor_after_refund - depositor_before_refund;
+    assert_eq!(refunded_amount, 400);
+
+    // Zero-sum invariant: contributor + refund = original
+    assert_eq!(contributor_received + refunded_amount, amount);
+}
+
+// ===========================================================================
+// 24. Dust threshold edge: amounts 1 through 10
+// ===========================================================================
+
+/// Exhaustively test all dust-level amounts from 1 to 10.
+#[test]
+fn test_all_dust_amounts_one_through_ten() {
+    for dust in 1_i128..=10 {
+        let s = Setup::new();
+        s.lock(100 + dust as u64, dust);
+
+        // Release 1 at a time until empty
+        for step in 1..=dust {
+            s.escrow
+                .partial_release(&(100 + dust as u64), &s.contributor, &1_i128);
+            let info = s.escrow.get_escrow_info(&(100 + dust as u64));
+            assert_eq!(info.remaining_amount, dust - step);
+        }
+
+        let info = s.escrow.get_escrow_info(&(100 + dust as u64));
+        assert_eq!(info.remaining_amount, 0);
+        assert_eq!(info.status, EscrowStatus::Released);
+    }
 }

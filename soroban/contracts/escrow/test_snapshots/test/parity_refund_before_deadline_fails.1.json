@@ -245,6 +245,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "labels"
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "remaining_amount"
                       },
                       "val": {

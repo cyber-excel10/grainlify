@@ -195,8 +195,14 @@ fn test_batch_and_split_payout_integration() {
         &prog_id,
         &vec![
             &env,
-            BeneficiarySplit { recipient: b1.clone(), share_bps: 7_000 },
-            BeneficiarySplit { recipient: b2.clone(), share_bps: 3_000 },
+            BeneficiarySplit {
+                recipient: b1.clone(),
+                share_bps: 7_000,
+            },
+            BeneficiarySplit {
+                recipient: b2.clone(),
+                share_bps: 3_000,
+            },
         ],
     );
 

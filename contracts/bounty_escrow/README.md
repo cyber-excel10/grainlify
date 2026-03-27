@@ -47,11 +47,63 @@ The escrow contract provides read-only dry-run entrypoints for previewing operat
 
 All return `SimulationResult` with success/error_code/amount/resulting_status/remaining_amount. No authorization required.
 
+## Participant filters
+
+The bounty escrow contract supports mutually exclusive participant filtering for new locks:
+
+- `Disabled` lets any depositor lock funds.
+- `BlocklistOnly` rejects blocklisted depositors with `ParticipantBlocked`.
+- `AllowlistOnly` accepts only allowlisted depositors and rejects others with `ParticipantNotAllowed`.
+
+Mode changes emit `ParticipantFilterModeChanged`, and allowlist entries continue to bypass anti-abuse cooldown checks even when filtering is disabled. See [contracts/escrow/PARTICIPANT_FILTER.md](contracts/escrow/PARTICIPANT_FILTER.md) for the full behavior matrix and edge cases.
+
 ## Metadata Constraints
 
 The escrow metadata API enforces validation rules for human-readable tags like
 `bounty_type`. See `contracts/escrow/METADATA_CONSTRAINTS.md` for the current
 limits and guidance.
+
+---
+
+## Risk flags (bounty metadata)
+
+Per-bounty risk signaling uses a `u32` bitfield on escrow metadata (`RISK_FLAG_*` constants in `lib.rs`). Admin-only entrypoints `set_escrow_risk_flags` and `clear_escrow_risk_flags` persist flags and emit `RiskFlagsUpdated` (versioned payload with `previous_flags`, `new_flags`, `admin`, `timestamp`) for indexers. Flags are informational on-chain; policy enforcement is expected off-chain. Tests: `contracts/escrow/src/test_risk_flags.rs`.
+
+## Treasury routing
+
+The escrow contract supports optional multi-region treasury routing for collected
+fees. Admins configure weighted `TreasuryDestination` entries through
+`set_treasury_distributions`, then enable routing with `distribution_enabled =
+true`.
+
+- Lock and release fees continue to use the existing fee rates.
+- When routing is disabled, the full fee is sent to the configured
+  `fee_recipient`.
+- When routing is enabled, the fee is split proportionally across treasury
+  destinations by weight.
+- Rounding remains deterministic: any remainder is assigned to the final
+  destination in config order so the distributed total always matches the
+  collected fee exactly.
+- Invalid enabled configurations are rejected if there are no destinations or
+  if any destination has zero weight.
+
+Tests: `contracts/escrow/src/test_multi_region_treasury.rs`.
+
+## Boundary limits
+
+| Area | Behavior |
+|------|----------|
+| Amount policy | Optional inclusive `[min_amount, max_amount]` via `set_amount_policy`; violations return `AmountBelowMinimum` / `AmountAboveMaximum`. `min > max` panics. |
+| Fees | Rates are in basis points; cap is `MAX_FEE_RATE` (5000 = 50%). |
+| Batch size | `MAX_BATCH_SIZE` (20) items per `batch_lock_funds` / `batch_release_funds`. |
+| Deadlines | `u64::MAX` is stored as-is (no-expiry style); past deadlines are allowed at lock time. |
+| Pagination | `get_escrow_ids_by_status` with `limit == 0` returns an empty list. |
+
+Tests: `contracts/escrow/src/test_boundary_edge_cases.rs` (and `test_batch_failure_modes.rs` for batch edges).
+
+## Status transitions and expiry vs dispute
+
+Valid payout paths are mutually exclusive: admin `release_funds` moves escrow to `Released`; refund moves to `Refunded` / `PartiallyRefunded`. A second release or refund on a terminal state fails with `FundsNotLocked` (or related errors). When a pending claim exists (`authorize_claim`), `refund` returns `ClaimPending` even if the bounty deadline has passed—admin must `cancel_pending_claim` (or the beneficiary `claim`s) before expiry-based refund applies. Tests: `contracts/escrow/src/test_lifecycle.rs`, `test_expiration_and_dispute.rs`, `test_status_transitions.rs`.
 
 ---
 
@@ -76,22 +128,3 @@ This repository uses the recommended structure for a Soroban project:
 - If you initialized this project with any other example contracts via `--with-example`, those contracts will be in the `contracts` directory as well.
 - Contracts should have their own `Cargo.toml` files that rely on the top-level `Cargo.toml` workspace for their dependencies.
 - Frontend libraries can be added to the top-level directory as well. If you initialized this project with a frontend template via `--frontend-template` you will have those files already included.
-
-## Bounty Escrow Auto-Refund Rules
-
-For `contracts/escrow`, automated refund triggering is permission-restricted:
-
-- `refund(bounty_id)` requires authenticated authorization from both:
-  - Contract `admin`
-  - Escrow `depositor`
-- Refund eligibility is still governed by existing rules:
-  - Deadline-based refund when `now >= deadline`, or
-  - Admin-approved refund via `approve_refund`
-- Unauthorized callers cannot trigger refund execution.
-
-See:
-
-- `contracts/escrow/src/lib.rs` (`refund`)
-- `contracts/escrow/src/test_auto_refund_permissions.rs`
-- `contracts/escrow/AUTO_REFUND_TESTS.md`
-- `SECURITY.md`

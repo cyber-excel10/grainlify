@@ -916,7 +916,10 @@ fn test_register_program_juris_config() {
     );
 
     let program = client.get_program(&91);
-    assert_eq!(program.jurisdiction, OptionalJurisdiction::Some(cfg.clone()));
+    assert_eq!(
+        program.jurisdiction,
+        OptionalJurisdiction::Some(cfg.clone())
+    );
     assert_eq!(client.get_program_jurisdiction(&91), Some(cfg));
 }
 
@@ -953,7 +956,10 @@ fn test_register_prog_w_juris_alias_builds_config_from_raw_fields() {
         max_funding: Some(6_000),
         registration_paused: false,
     };
-    assert_eq!(program.jurisdiction, OptionalJurisdiction::Some(expected.clone()));
+    assert_eq!(
+        program.jurisdiction,
+        OptionalJurisdiction::Some(expected.clone())
+    );
     assert_eq!(client.get_program_jurisdiction(&191), Some(expected));
     assert_eq!(token_client.balance(&contract_id), 5_000);
 }
@@ -1162,7 +1168,10 @@ fn test_batch_reg_progs_w_juris_alias_builds_config_from_raw_fields() {
         registration_paused: false,
     };
     let program = client.get_program(&195);
-    assert_eq!(program.jurisdiction, OptionalJurisdiction::Some(expected.clone()));
+    assert_eq!(
+        program.jurisdiction,
+        OptionalJurisdiction::Some(expected.clone())
+    );
     assert_eq!(client.get_program_jurisdiction(&195), Some(expected));
     assert_eq!(token_client.balance(&contract_id), 5_000);
 }

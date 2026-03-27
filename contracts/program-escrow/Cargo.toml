@@ -14,6 +14,7 @@ grainlify-core = { path = "../grainlify-core" }
 soroban-sdk = { version = "21.0.0", features = ["testutils"] }
 
 [profile.release]
+overflow-checks = true
 opt-level = "z"
 lto = true
 codegen-units = 1

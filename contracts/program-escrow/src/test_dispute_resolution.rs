@@ -107,7 +107,8 @@ fn test_open_dispute_emits_event() {
             return false;
         }
         let sym = Symbol::try_from_val(&env, &t.get(0).unwrap());
-        sym.map(|s| s == Symbol::new(&env, "DspOpen")).unwrap_or(false)
+        sym.map(|s| s == Symbol::new(&env, "DspOpen"))
+            .unwrap_or(false)
     });
     assert!(found, "DspOpen event not emitted");
 }
@@ -188,7 +189,8 @@ fn test_resolve_dispute_emits_event() {
             return false;
         }
         let sym = Symbol::try_from_val(&env, &t.get(0).unwrap());
-        sym.map(|s| s == Symbol::new(&env, "DspRslv")).unwrap_or(false)
+        sym.map(|s| s == Symbol::new(&env, "DspRslv"))
+            .unwrap_or(false)
     });
     assert!(found, "DspRslv event not emitted");
 }
@@ -222,7 +224,10 @@ fn test_resolve_dispute_allows_batch_payout() {
 
     let r1 = Address::generate(&env);
     let r2 = Address::generate(&env);
-    let data = client.batch_payout(&vec![&env, r1.clone(), r2.clone()], &vec![&env, 300_i128, 200_i128]);
+    let data = client.batch_payout(
+        &vec![&env, r1.clone(), r2.clone()],
+        &vec![&env, 300_i128, 200_i128],
+    );
 
     assert_eq!(data.remaining_balance, 500);
     assert_eq!(token.balance(&r1), 300);
