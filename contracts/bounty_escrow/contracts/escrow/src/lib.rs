@@ -17,6 +17,7 @@ mod test_rbac;
 mod test_risk_flags;
 mod traits;
 pub mod upgrade_safety;
+pub mod audit_trail;
 
 use crate::constants::*;
 use crate::errors::*;
@@ -1058,6 +1059,18 @@ impl BountyEscrowContract {
 
     pub fn get_state_snapshot(env: Env) -> monitoring::StateSnapshot {
         monitoring::get_state_snapshot(&env)
+    }
+    /// Enable or disable the on-chain append-only audit log (Admin only).
+    pub fn set_audit_enabled(env: Env, enabled: bool) -> Result<(), Error> {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        audit_trail::set_enabled(&env, enabled);
+        Ok(())
+    }
+
+    /// Retrieve the last `n` records from the audit log.
+    pub fn get_audit_tail(env: Env, n: u32) -> Vec<audit_trail::AuditRecord> {
+        audit_trail::get_audit_tail(&env, n)
     }
 
     fn order_batch_lock_items(env: &Env, items: &Vec<LockFundsItem>) -> Vec<LockFundsItem> {
@@ -2718,7 +2731,7 @@ impl BountyEscrowContract {
                 return Err(e);
             }
         }
-
+        audit_trail::log_action(&env, symbol_short!("lock"), depositor.clone(), bounty_id);
         // GUARD: release reentrancy lock
         reentrancy_guard::release(&env);
         Ok(())
@@ -3154,7 +3167,7 @@ impl BountyEscrowContract {
                 timestamp: env.ledger().timestamp(),
             },
         );
-
+        audit_trail::log_action(&env, symbol_short!("release"), contributor.clone(), bounty_id);
         // GUARD: release reentrancy lock
         reentrancy_guard::release(&env);
         Ok(())
@@ -3940,7 +3953,7 @@ impl BountyEscrowContract {
                 return Err(e);
             }
         }
-
+        audit_trail::log_action(&env, symbol_short!("refund"), escrow.depositor.clone(), bounty_id);
         // GUARD: release reentrancy lock
         reentrancy_guard::release(&env);
         Ok(())
