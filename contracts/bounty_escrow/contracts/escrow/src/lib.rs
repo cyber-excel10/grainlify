@@ -1,9 +1,12 @@
-pub mod gas_budget;
+#![no_std]
+
 mod events;
+pub mod gas_budget;
+mod invariants;
+mod multitoken_invariants;
+mod reentrancy_guard;
 #[cfg(test)]
 mod test_boundary_edge_cases;
-#[cfg(test)]
-mod test_renew_rollover;
 mod test_cross_contract_interface;
 #[cfg(test)]
 mod test_deterministic_randomness;
@@ -13,6 +16,8 @@ mod test_multi_region_treasury;
 mod test_multi_token_fees;
 #[cfg(test)]
 mod test_rbac;
+#[cfg(test)]
+mod test_renew_rollover;
 #[cfg(test)]
 mod test_risk_flags;
 mod traits;
@@ -33,7 +38,7 @@ use crate::events::{
     ClaimCancelled, ClaimCreated, ClaimExecuted, CriticalOperationOutcome, DeprecationStateChanged,
     DeterministicSelectionDerived, FundsLocked, FundsLockedAnon, FundsRefunded, FundsReleased,
     MaintenanceModeChanged, NotificationPreferencesUpdated, ParticipantFilterModeChanged,
-    RiskFlagsUpdated, TicketClaimed, TicketIssued, EVENT_VERSION_V2,
+    RefundTriggerType, RiskFlagsUpdated, TicketClaimed, TicketIssued, EVENT_VERSION_V2,
 };
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
@@ -1359,7 +1364,9 @@ impl BountyEscrowContract {
 
         for (index, destination) in config.treasury_destinations.iter().enumerate() {
             let share = if index + 1 == destination_count {
-                amount.checked_sub(distributed).ok_or(Error::InvalidAmount)?
+                amount
+                    .checked_sub(distributed)
+                    .ok_or(Error::InvalidAmount)?
             } else {
                 amount
                     .checked_mul(destination.weight as i128)
@@ -1372,7 +1379,11 @@ impl BountyEscrowContract {
                 continue;
             }
 
-            client.transfer(&env.current_contract_address(), &destination.address, &share);
+            client.transfer(
+                &env.current_contract_address(),
+                &destination.address,
+                &share,
+            );
             events::emit_fee_collected(
                 env,
                 events::FeeCollected {
@@ -2289,7 +2300,11 @@ impl BountyEscrowContract {
         Ok(capability_id.clone())
     }
 
-    pub fn revoke_capability(env: Env, owner: Address, capability_id: BytesN<32>) -> Result<(), Error> {
+    pub fn revoke_capability(
+        env: Env,
+        owner: Address,
+        capability_id: BytesN<32>,
+    ) -> Result<(), Error> {
         let mut capability = Self::load_capability(&env, capability_id.clone())?;
         if capability.owner != owner {
             return Err(Error::Unauthorized);
@@ -2646,6 +2661,16 @@ impl BountyEscrowContract {
             fee_recipient,
             fee_enabled,
         ) = Self::resolve_fee_config(&env);
+        let fee_config = FeeConfig {
+            lock_fee_rate,
+            release_fee_rate: 0,
+            lock_fixed_fee,
+            release_fixed_fee: 0,
+            fee_recipient: fee_recipient.clone(),
+            fee_enabled,
+            treasury_destinations: Vec::new(&env),
+            distribution_enabled: false,
+        };
 
         // Deduct lock fee from the escrowed principal (percentage + fixed, capped at deposit).
         let fee_amount =
@@ -3935,6 +3960,11 @@ impl BountyEscrowContract {
                 amount: refund_amount,
                 refund_to: refund_to.clone(),
                 timestamp: now,
+                trigger_type: if approval.is_some() {
+                    RefundTriggerType::AdminApproval
+                } else {
+                    RefundTriggerType::DeadlineExpired
+                },
             },
         );
         Self::record_receipt(
@@ -4180,7 +4210,11 @@ impl BountyEscrowContract {
         if previous_bounty_id == new_bounty_id {
             return Err(Error::BountyExists);
         }
-        if env.storage().persistent().has(&DataKey::Escrow(new_bounty_id)) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Escrow(new_bounty_id))
+        {
             return Err(Error::BountyExists);
         }
         if !env
@@ -4212,7 +4246,11 @@ impl BountyEscrowContract {
         previous.depositor.require_auth();
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let client = token::Client::new(&env, &token_addr);
-        client.transfer(&previous.depositor, &env.current_contract_address(), &amount);
+        client.transfer(
+            &previous.depositor,
+            &env.current_contract_address(),
+            &amount,
+        );
 
         let new_escrow = Escrow {
             depositor: previous.depositor.clone(),
@@ -4445,6 +4483,11 @@ impl BountyEscrowContract {
                 amount: refund_amount,
                 refund_to: refund_to.clone(),
                 timestamp: now,
+                trigger_type: if approval.is_some() {
+                    RefundTriggerType::AdminApproval
+                } else {
+                    RefundTriggerType::DeadlineExpired
+                },
             },
         );
 
@@ -4551,6 +4594,7 @@ impl BountyEscrowContract {
                 amount,
                 refund_to,
                 timestamp: now,
+                trigger_type: RefundTriggerType::AdminApproval,
             },
         );
 

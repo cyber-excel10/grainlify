@@ -690,7 +690,6 @@ pub struct ProgramAggregateStats {
     pub released_count: u32,
 }
 
-use grainlify_core::errors;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1158,7 +1157,7 @@ impl ProgramEscrowContract {
         }
 
         let mut program_data = Self::initialize_program(
-            env,
+            env.clone(),
             program_id,
             authorized_payout_key,
             token_address,
@@ -2551,7 +2550,7 @@ impl ProgramEscrowContract {
         )
     }
 
-    pub fn create_program_release_schedule_by(
+    pub fn create_prog_release_schedule_by(
         env: Env,
         caller: Address,
         recipient: Address,
@@ -3318,7 +3317,7 @@ impl ProgramEscrowContract {
         Self::release_program_schedule_manual_internal(env, None, schedule_id)
     }
 
-    pub fn release_program_schedule_manual_by(env: Env, caller: Address, schedule_id: u64) {
+    pub fn release_prog_schedule_manual_by(env: Env, caller: Address, schedule_id: u64) {
         Self::release_program_schedule_manual_internal(env, Some(caller), schedule_id)
     }
 

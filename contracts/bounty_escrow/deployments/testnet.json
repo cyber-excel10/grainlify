@@ -1,0 +1,17 @@
+{
+  "deployments": [
+    {
+      "contract_id": "FAKE_CONTRACT_ID_1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+      "wasm_hash": "FAKE_WASM_HASH_1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+      "contract_name": "fake_invalid",
+      "network": "testnet",
+      "deployer": "grainlify-deployer",
+      "deployed_at": "2026-03-27T22:35:26Z",
+      "status": "deployed"
+    }
+  ],
+  "metadata": {
+    "created": "2026-03-27T22:35:26Z",
+    "version": "1.0"
+  }
+}

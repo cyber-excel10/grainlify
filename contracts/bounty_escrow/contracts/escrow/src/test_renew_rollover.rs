@@ -99,8 +99,14 @@ fn test_renew_with_topup_increases_locked_balance_and_amount() {
     let escrow = s.escrow.get_escrow_info(&bounty_id);
     assert_eq!(escrow.amount, amount + topup);
     assert_eq!(escrow.remaining_amount, amount + topup);
-    assert_eq!(s.token.balance(&s.escrow.address), contract_balance_before + topup);
-    assert_eq!(s.token.balance(&s.depositor), depositor_balance_before - topup);
+    assert_eq!(
+        s.token.balance(&s.escrow.address),
+        contract_balance_before + topup
+    );
+    assert_eq!(
+        s.token.balance(&s.depositor),
+        depositor_balance_before - topup
+    );
 }
 
 #[test]
@@ -145,7 +151,9 @@ fn test_renew_rejects_invalid_transitions() {
     let same_deadline = s.escrow.try_renew_escrow(&bounty_id, &deadline, &0);
     assert_eq!(same_deadline, Err(Ok(Error::InvalidDeadline)));
 
-    let negative = s.escrow.try_renew_escrow(&bounty_id, &(deadline + 1_000), &-1);
+    let negative = s
+        .escrow
+        .try_renew_escrow(&bounty_id, &(deadline + 1_000), &-1);
     assert_eq!(negative, Err(Ok(Error::InvalidAmount)));
 
     s.escrow.release_funds(&bounty_id, &s.contributor);
@@ -258,7 +266,9 @@ fn test_create_next_cycle_rejects_invalid_state_and_duplicate_successor() {
     s.escrow.release_funds(&id1, &s.contributor);
     s.escrow.create_next_cycle(&id1, &id2, &amount, &d2);
 
-    let dup_successor = s.escrow.try_create_next_cycle(&id1, &id3, &amount, &(d2 + 1_000));
+    let dup_successor = s
+        .escrow
+        .try_create_next_cycle(&id1, &id3, &amount, &(d2 + 1_000));
     assert_eq!(dup_successor, Err(Ok(Error::BountyExists)));
 }
 
@@ -273,25 +283,19 @@ fn test_create_next_cycle_rejects_invalid_params() {
     s.lock_bounty(id1, amount, d1);
     s.escrow.release_funds(&id1, &s.contributor);
 
-    let zero_amount = s.escrow.try_create_next_cycle(
-        &id1,
-        &id2,
-        &0,
-        &(s.env.ledger().timestamp() + 5_000),
-    );
+    let zero_amount =
+        s.escrow
+            .try_create_next_cycle(&id1, &id2, &0, &(s.env.ledger().timestamp() + 5_000));
     assert_eq!(zero_amount, Err(Ok(Error::InvalidAmount)));
 
-    let past_deadline = s
-        .escrow
-        .try_create_next_cycle(&id1, &id2, &amount, &(s.env.ledger().timestamp()));
+    let past_deadline =
+        s.escrow
+            .try_create_next_cycle(&id1, &id2, &amount, &(s.env.ledger().timestamp()));
     assert_eq!(past_deadline, Err(Ok(Error::InvalidDeadline)));
 
-    let same_id = s.escrow.try_create_next_cycle(
-        &id1,
-        &id1,
-        &amount,
-        &(s.env.ledger().timestamp() + 5_000),
-    );
+    let same_id =
+        s.escrow
+            .try_create_next_cycle(&id1, &id1, &amount, &(s.env.ledger().timestamp() + 5_000));
     assert_eq!(same_id, Err(Ok(Error::BountyExists)));
 }
 
