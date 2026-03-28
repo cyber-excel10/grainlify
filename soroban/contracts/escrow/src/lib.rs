@@ -51,6 +51,8 @@ pub enum Error {
     TransactionExceedsLimit = 305,
     InvalidRiskScore = 306,
     InvalidTier = 307,
+    InvalidDelegatePermissions = 308,
+    InvalidDelegateTarget = 309,
 }
 
 #[contracttype]
@@ -71,6 +73,9 @@ pub struct Escrow {
     pub deadline: u64,
     pub jurisdiction: OptionalJurisdiction,
     pub labels: Vec<String>,
+    pub delegate: Option<Address>,
+    pub delegate_permissions: u32,
+    pub metadata: Option<String>,
 }
 
 #[contracttype]
@@ -623,6 +628,9 @@ impl EscrowContract {
             deadline,
             jurisdiction: jurisdiction.clone(),
             labels: Vec::new(&env),
+            delegate: None,
+            delegate_permissions: 0,
+            metadata: None,
         };
         env.storage()
             .persistent()
@@ -688,6 +696,7 @@ impl EscrowContract {
         Self::release_funds_by(env, admin, bounty_id, contributor)
     }
 
+    /// Release funds to contributor directly by an authorized actor.
     pub fn release_funds_by(
         env: Env,
         caller: Address,
@@ -707,6 +716,12 @@ impl EscrowContract {
             .get(&DataKey::Escrow(bounty_id))
             .unwrap();
         Self::require_escrow_actor(&env, &escrow, &caller, DELEGATE_PERMISSION_RELEASE)?;
+        if let OptionalJurisdiction::Some(config) = &escrow.jurisdiction {
+            if config.release_paused {
+                reentrancy_guard::release(&env);
+                return Err(Error::Unauthorized);
+            }
+        }
         if escrow.status != EscrowStatus::Locked {
             return Err(Error::FundsNotLocked);
         }
@@ -768,6 +783,12 @@ impl EscrowContract {
             .get(&DataKey::Escrow(bounty_id))
             .unwrap();
         Self::require_escrow_actor(&env, &escrow, &caller, DELEGATE_PERMISSION_REFUND)?;
+        if let OptionalJurisdiction::Some(config) = &escrow.jurisdiction {
+            if config.refund_paused {
+                reentrancy_guard::release(&env);
+                return Err(Error::Unauthorized);
+            }
+        }
         if escrow.status != EscrowStatus::Locked {
             return Err(Error::FundsNotLocked);
         }
