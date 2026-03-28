@@ -1,5 +1,4 @@
-use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+#![no_std]
 
 pub mod gas_budget;
 #[cfg(test)]
@@ -20,12 +19,10 @@ mod test_draft_state;
 mod traits;
 pub mod upgrade_safety;
 
-use crate::constants::*;
-use crate::errors::*;
-use crate::events::*;
-use crate::state::*;
-
-declare_id!("8vS5pL7e6k2xP7L9R9jGv6D5v8S5pL7e6k2xP7L9R9jG");
+mod events;
+mod reentrancy_guard;
+mod invariants;
+mod multitoken_invariants;
 
 #[cfg(test)]
 mod test_frozen_balance;
@@ -34,19 +31,18 @@ mod test_reentrancy_guard;
 
 use events::{
     emit_batch_funds_locked, emit_batch_funds_released, emit_bounty_initialized,
-    emit_deprecation_state_changed, emit_deterministic_selection, emit_funds_locked,
+    emit_deprecation_state_changed, emit_deterministic_selection, emit_escrow_published, emit_funds_locked,
     emit_funds_locked_anon, emit_funds_refunded, emit_funds_released,
     emit_maintenance_mode_changed, emit_notification_preferences_updated,
     emit_participant_filter_mode_changed, emit_risk_flags_updated, emit_ticket_claimed,
     emit_ticket_issued, BatchFundsLocked, BatchFundsReleased, BountyEscrowInitialized,
     ClaimCancelled, ClaimCreated, ClaimExecuted, CriticalOperationOutcome, DeprecationStateChanged,
-    DeterministicSelectionDerived, FundsLocked, FundsLockedAnon, FundsRefunded, FundsReleased,
+    DeterministicSelectionDerived, EscrowPublished, FundsLocked, FundsLockedAnon, FundsRefunded, FundsReleased,
     MaintenanceModeChanged, NotificationPreferencesUpdated, ParticipantFilterModeChanged,
     RiskFlagsUpdated, TicketClaimed, TicketIssued, EVENT_VERSION_V2,
 };
-use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, vec, Address, Bytes,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, vec, Address,
     BytesN, Env, String, Symbol, Vec,
 };
 
@@ -619,6 +615,8 @@ pub enum Error {
     EscrowFrozen = 45,
     /// Returned when the escrow depositor is explicitly frozen by an admin hold.
     AddressFrozen = 46,
+    /// Returned when the contract is in an invalid state for the operation
+    InvalidState = 47,
 }
 
 /// Bit flag: escrow or payout should be treated as elevated risk (indexers, UIs).
@@ -1288,14 +1286,10 @@ impl BountyEscrowContract {
     ///
     /// Accepts a pre-constructed [`FeeCollected`] event which contains all fee details.
     /// The token client and fee config are resolved internally from contract storage.
-    fn route_fee(env: &Env, fee_event: events::FeeCollected) {
+    fn route_fee(env: &Env, fee_event: events::FeeCollected) -> Result<(), Error> {
         if fee_event.amount <= 0 {
-            return;
+            return Ok(());
         }
-        let fee_fixed = match operation_type {
-            events::FeeOperationType::Lock => config.lock_fixed_fee,
-            events::FeeOperationType::Release => config.release_fixed_fee,
-        };
 
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let client = token::Client::new(env, &token_addr);
@@ -1308,7 +1302,7 @@ impl BountyEscrowContract {
                 &fee_event.amount,
             );
             events::emit_fee_collected(env, fee_event);
-            return;
+            return Ok(());
         }
 
         let mut total_weight: u64 = 0;
@@ -1325,7 +1319,7 @@ impl BountyEscrowContract {
                 &fee_event.amount,
             );
             events::emit_fee_collected(env, fee_event);
-            return;
+            return Ok(());
         }
 
         let mut distributed = 0i128;
@@ -1367,6 +1361,7 @@ impl BountyEscrowContract {
                 },
             );
         }
+        Ok(())
     }
 
     /// Update fee configuration (admin only)
@@ -2659,11 +2654,14 @@ impl BountyEscrowContract {
         if fee_amount > 0 {
             Self::route_fee(
                 &env,
-                &client,
-                &fee_config,
-                fee_amount,
-                lock_fee_rate,
-                events::FeeOperationType::Lock,
+                events::FeeCollected {
+                    operation_type: events::FeeOperationType::Lock,
+                    amount: fee_amount,
+                    fee_rate: lock_fee_rate,
+                    fee_fixed: lock_fixed_fee,
+                    recipient: fee_recipient.clone(),
+                    timestamp: env.ledger().timestamp(),
+                },
             )?;
         }
         soroban_sdk::log!(&env, "fee ok");
@@ -3215,11 +3213,14 @@ impl BountyEscrowContract {
         if release_fee > 0 {
             Self::route_fee(
                 &env,
-                &client,
-                &fee_config,
-                release_fee,
-                release_fee_rate,
-                events::FeeOperationType::Release,
+                events::FeeCollected {
+                    operation_type: events::FeeOperationType::Release,
+                    amount: release_fee,
+                    fee_rate: release_fee_rate,
+                    fee_fixed: fee_config.release_fixed_fee,
+                    recipient: fee_config.fee_recipient.clone(),
+                    timestamp: env.ledger().timestamp(),
+                },
             )?;
         }
 
@@ -3993,6 +3994,7 @@ impl BountyEscrowContract {
                 amount: refund_amount,
                 refund_to: refund_to.clone(),
                 timestamp: now,
+                trigger_type: events::RefundTriggerType::AdminApproval,
             },
         );
         Self::record_receipt(
@@ -4260,6 +4262,7 @@ impl BountyEscrowContract {
                 amount: refund_amount,
                 refund_to: refund_to.clone(),
                 timestamp: now,
+                trigger_type: events::RefundTriggerType::AdminApproval,
             },
         );
 
@@ -4354,14 +4357,15 @@ impl BountyEscrowContract {
         client.transfer(&contract_address, &refund_to, &amount);
 
         // Emit event
-        emit_refund_executed(
+        emit_funds_refunded(
             &env,
-            RefundExecuted {
+            FundsRefunded {
                 version: EVENT_VERSION_V2,
                 bounty_id,
                 amount,
-                recipient: refund_to,
+                refund_to: refund_to.clone(),
                 timestamp: now,
+                trigger_type: events::RefundTriggerType::AdminApproval,
             },
         );
 
@@ -4609,12 +4613,7 @@ impl BountyEscrowContract {
 
         // GUARD: release reentrancy lock
         reentrancy_guard::release(&env);
-        Ok(locked_count)
-    }
-
-    /// Alias for batch_lock_funds to match the requested naming convention.
-    pub fn batch_lock(env: Env, items: Vec<LockFundsItem>) -> Result<u32, Error> {
-        Self::batch_lock_funds(env, items)
+        result
     }
 
     /// Batch release funds to multiple contributors in a single atomic transaction.

@@ -11,6 +11,7 @@ doctest = false
 [features]
 default = []
 metadata_tagging = []
+testutils = []
 
 [dependencies]
 soroban-sdk = { workspace = true }
