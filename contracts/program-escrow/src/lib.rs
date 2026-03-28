@@ -528,7 +528,8 @@ pub enum DataKey {
     MaintenanceMode,                 // bool flag
     ProgramDependencies(String),     // program_id -> Vec<String>
     DependencyStatus(String),        // program_id -> DependencyStatus
-    Dispute,                         // DisputeRecord (single active dispute per contract)
+    Dispute,  
+    SplitConfig(String),                       // DisputeRecord (single active dispute per contract)
 }
 
 #[contracttype]
