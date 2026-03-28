@@ -197,7 +197,10 @@ impl MultiSig {
 
     /// Return whether the contract is currently paused.
     pub fn is_contract_paused(env: &Env) -> bool {
-        env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
     }
 
     /// Return whether the multisig configuration is structurally unsafe.
