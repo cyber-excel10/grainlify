@@ -1,7 +1,5 @@
 use crate::asset;
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol,
-};
+use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Map, Symbol};
 
 /// Represents the lifecycle stages of a governance proposal.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -122,7 +120,6 @@ pub const VOTES: Symbol = symbol_short!("VOTES");
 pub const GOVERNANCE_CONFIG: Symbol = symbol_short!("GOV_CFG");
 
 /// Governance errors returned by the standalone governance contract.
-use crate::errors;
 #[soroban_sdk::contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]

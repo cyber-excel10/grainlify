@@ -180,6 +180,19 @@ impl MultiSig {
         env.storage().instance().get(&DataKey::Config)
     }
 
+    /// Sets the multisig configuration directly for controlled restore flows.
+    pub fn set_config(env: &Env, config: MultiSigConfig) {
+        if config.threshold == 0 || config.threshold > config.signers.len() as u32 {
+            panic!("{:?}", MultiSigError::InvalidThreshold);
+        }
+        env.storage().instance().set(&DataKey::Config, &config);
+    }
+
+    /// Clears the multisig configuration for controlled restore flows.
+    pub fn clear_config(env: &Env) {
+        env.storage().instance().remove(&DataKey::Config);
+    }
+
     /// Marks a proposal as executed after the guarded action succeeds.
     pub fn mark_executed(env: &Env, proposal_id: u64) {
         let mut proposal = Self::get_proposal(env, proposal_id);
