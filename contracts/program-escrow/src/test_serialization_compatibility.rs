@@ -2,6 +2,7 @@ extern crate std;
 
 use soroban_sdk::{
     xdr::{FromXdr, Hash, ScAddress, ToXdr},
+    testutils::Address as _,
     Address, Env, IntoVal, String as SdkString, Symbol, TryFromVal, Val,
 };
 
@@ -80,10 +81,13 @@ fn serialization_compatibility_public_types_and_events() {
         total_funds: 10_000,
         remaining_balance: 9_000,
         authorized_payout_key: authorized.clone(),
+        delegate: None,
+        delegate_permissions: 0,
         payout_history: payout_history.clone(),
         token_address: token.clone(),
         initial_liquidity: 500,
         risk_flags: 0,
+        metadata: None,
         reference_hash: None,
         archived: false,
         archived_at: None,
@@ -132,6 +136,8 @@ fn serialization_compatibility_public_types_and_events() {
             FeeConfig {
                 lock_fee_rate: 100,
                 payout_fee_rate: 200,
+                lock_fixed_fee: 0,
+                payout_fixed_fee: 0,
                 fee_recipient: fee_recipient.clone(),
                 fee_enabled: true,
             }

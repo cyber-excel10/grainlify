@@ -79,11 +79,16 @@ impl SplitTestEnv {
             total_funds: remaining_balance,
             remaining_balance,
             authorized_payout_key: self.payout_key.clone(),
+            delegate: None,
+            delegate_permissions: 0,
             payout_history: vec![&self.env],
             token_address: self.token.clone(),
             initial_liquidity: 0,
             risk_flags: 0,
+            metadata: None,
             reference_hash: None,
+            archived: false,
+            archived_at: None,
         };
         self.env
             .storage()

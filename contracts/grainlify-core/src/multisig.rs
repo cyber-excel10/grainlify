@@ -151,31 +151,26 @@ impl MultiSig {
         !proposal.executed && proposal.approvals.len() >= config.threshold
     }
 
-    pub fn is_contract_paused(env: &Env) -> bool {
+    /// Marks a proposal as executed after the guarded action succeeds.
+    pub fn mark_executed(env: &Env, proposal_id: u64) {
+        let mut proposal = Self::get_proposal(env, proposal_id);
+
+        if proposal.executed {
+            panic!("{:?}", MultiSigError::AlreadyExecuted);
+        }
+
+        if !Self::can_execute(env, proposal_id) {
+            panic!("{:?}", MultiSigError::ThresholdNotMet);
+        }
+
+        proposal.executed = true;
+
         env.storage()
             .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false)
-    }
+            .set(&DataKey::Proposal(proposal_id), &proposal);
 
-    pub fn pause(env: &Env, signer: Address) {
-        signer.require_auth();
-        let config = Self::get_config(env);
-        Self::assert_signer(&config, &signer);
-        env.storage().instance().set(&DataKey::Paused, &true);
-        env.events().publish((symbol_short!("paused"),), signer);
-    }
-
-    pub fn unpause(env: &Env, signer: Address) {
-        signer.require_auth();
-        let config = Self::get_config(env);
-        Self::assert_signer(&config, &signer);
-        env.storage().instance().set(&DataKey::Paused, &false);
-        env.events().publish((symbol_short!("unpaused"),), signer);
-    }
-
-    pub fn is_state_inconsistent(_env: &Env) -> bool {
-        false
+        env.events()
+            .publish((symbol_short!("executed"),), proposal_id);
     }
 
     /// Returns the current multisig configuration, if initialized.
@@ -210,9 +205,13 @@ impl MultiSig {
 
         proposal.executed = true;
 
+    /// Return whether the contract is currently paused.
+    pub fn is_contract_paused(env: &Env) -> bool {
         env.storage()
             .instance()
-            .set(&DataKey::Proposal(proposal_id), &proposal);
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
 
         env.events()
             .publish((symbol_short!("executed"),), proposal_id);
