@@ -309,11 +309,14 @@ fn test_metadata_only_delegate_cannot_execute_release() {
         tags: vec![&env, String::from_str(&env, "delegate")],
         start_date: Some(1),
         end_date: Some(2),
-        custom_fields: vec![&env, MetadataCustomField { key: String::from_str(&env, "track"), value: String::from_str(&env, "infra") }],
+        custom_fields: vec![&env, ProgramMetadataField {
+            key: String::from_str(&env, "track"),
+            value: String::from_str(&env, "infra"),
+        }],
     };
 
-    let updated = client.update_program_metadata_by(&delegate, &program_id, &metadata);
-    assert_eq!(updated.metadata, Some(metadata));
+    let updated = client.update_program_metadata(&program_id, &delegate, &metadata);
+    assert_eq!(updated.metadata, metadata);
 
     assert!(client
         .try_single_payout_by(&delegate, &recipient, &100)

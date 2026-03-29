@@ -774,7 +774,7 @@ fn test_batch_initialize_programs_empty_err() {
     let client = ProgramEscrowContractClient::new(&env, &contract_id);
     let items: Vec<ProgramInitItem> = Vec::new(&env);
     let res = client.try_batch_initialize_programs(&items);
-    assert!(matches!(res, Err(Ok(BatchError::InvalidBatchSize))));
+    assert!(matches!(res, Err(Ok(BatchError::InvalidBatchSizeProgram))));
 }
 
 #[test]
@@ -894,7 +894,7 @@ fn test_batch_register_exceeds_max_batch_size() {
     }
 
     let res = client.try_batch_initialize_programs(&items);
-    assert!(matches!(res, Err(Ok(BatchError::InvalidBatchSize))));
+    assert!(matches!(res, Err(Ok(BatchError::InvalidBatchSizeProgram))));
 }
 
 #[test]
@@ -2239,6 +2239,90 @@ fn test_release_schedules_persist_after_simulated_upgrade() {
     assert_eq!(stats_final.released_count, 2);
     assert_eq!(stats_final.scheduled_count, 0);
     assert_eq!(stats_final.remaining_balance, 100_000);
+}
+
+#[test]
+fn test_release_schedules_timestamps_and_manual_release_after_simulated_upgrade() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 300_000);
+
+    let now = env.ledger().timestamp();
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    let s1 = client.create_program_release_schedule(&r1, &100_000, &(now + 100));
+    let s2 = client.create_program_release_schedule(&r2, &150_000, &(now + 200));
+
+    let schedules_before = client.get_all_prog_release_schedules();
+    assert_eq!(schedules_before.len(), 2);
+    assert_eq!(schedules_before.get(0).unwrap().release_timestamp, now + 100);
+    assert_eq!(schedules_before.get(1).unwrap().release_timestamp, now + 200);
+    assert!(!schedules_before.get(0).unwrap().released);
+    assert!(!schedules_before.get(1).unwrap().released);
+
+    // Simulated upgrade (no re-init, state is preserved)
+    env.ledger().set_timestamp(now + 150);
+    let released_count = client.trigger_program_releases();
+    assert_eq!(released_count, 1);
+
+    let schedules_mid = client.get_all_prog_release_schedules();
+    assert_eq!(schedules_mid.len(), 2);
+    let mid_s1 = schedules_mid.iter().find(|s| s.schedule_id == s1.schedule_id).unwrap();
+    let mid_s2 = schedules_mid.iter().find(|s| s.schedule_id == s2.schedule_id).unwrap();
+    assert!(mid_s1.released);
+    assert_eq!(mid_s1.release_timestamp, now + 100);
+    assert!(!mid_s2.released);
+    assert_eq!(mid_s2.release_timestamp, now + 200);
+
+    // Manual release should succeed after upgrade even if schedule timestamp is in future.
+    client.release_program_schedule_manual(&s2.schedule_id);
+
+    let stats_after_manual = client.get_program_aggregate_stats();
+    assert_eq!(stats_after_manual.released_count, 2);
+    assert_eq!(stats_after_manual.scheduled_count, 0);
+    assert_eq!(stats_after_manual.remaining_balance, 50_000);
+
+    let schedules_final = client.get_all_prog_release_schedules();
+    let final_s2 = schedules_final.iter().find(|s| s.schedule_id == s2.schedule_id).unwrap();
+    assert!(final_s2.released);
+    assert_eq!(final_s2.release_timestamp, now + 200);
+}
+
+#[test]
+fn test_release_schedules_work_after_v2_program_state_migration() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 400_000);
+
+    let program_id = String::from_str(&env, "hack-2026");
+    let now = env.ledger().timestamp();
+    let recipient = Address::generate(&env);
+
+    client.create_program_release_schedule(&recipient, &100_000, &(now + 100));
+
+    let prog_v2_before = client.get_program_info_v2(&program_id);
+    println!("prog_v2_before.remaining_balance={}", prog_v2_before.remaining_balance);
+    println!("prog_v2_before.total_funds={}", prog_v2_before.total_funds);
+    assert_eq!(prog_v2_before.remaining_balance, 400_000);
+
+    env.ledger().set_timestamp(now + 200);
+    let released = client.trigger_program_releases();
+    assert_eq!(released, 1);
+
+    let schedule = client
+        .get_all_prog_release_schedules()
+        .iter()
+        .find(|s| s.schedule_id == 1)
+        .unwrap();
+    assert!(schedule.released);
+    assert_eq!(schedule.release_timestamp, now + 100);
+
+    let history = client.get_program_release_history();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history.get(0).unwrap().schedule_id, 1);
+
+    let prog_v2_after = client.get_program_info_v2(&program_id);
+    assert_eq!(prog_v2_after.remaining_balance, 300_000);
+    assert_eq!(prog_v2_after.payout_history.len(), 1);
 }
 
 #[test]

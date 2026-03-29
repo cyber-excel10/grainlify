@@ -13,7 +13,7 @@ extern crate std;
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    token, vec, Address, Env, String,
+    token, vec, Address, Env, String, Vec,
 };
 
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
         set_split_config, BeneficiarySplit, SplitConfig, SplitConfigSetEvent, SplitPayoutEvent,
         SplitPayoutResult, TOTAL_BASIS_POINTS,
     },
-    DataKey, ProgramData, PROGRAM_DATA,
+    DataKey, ProgramData, ProgramMetadata, PROGRAM_DATA,
 };
 
 // ===========================================================================
@@ -85,7 +85,15 @@ impl SplitTestEnv {
             token_address: self.token.clone(),
             initial_liquidity: 0,
             risk_flags: 0,
-            metadata: None,
+            metadata: ProgramMetadata {
+                program_name: None,
+                program_type: None,
+                ecosystem: None,
+                tags: Vec::new(&self.env),
+                start_date: None,
+                end_date: None,
+                custom_fields: Vec::new(&self.env),
+            },
             reference_hash: None,
             archived: false,
             archived_at: None,

@@ -126,7 +126,7 @@ fn test_release_and_refund_allowed_in_maintenance_mode() {
 fn test_emergency_withdraw_allowed_in_maintenance_mode() {
     let env = Env::default();
     env.mock_all_auths();
-    let (contract, admin, _payout_key, token) = setup_program_with_admin(&env);
+    let (contract, _admin, _payout_key, token) = setup_program_with_admin(&env);
 
     let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token.address);
     let depositor = Address::generate(&env);

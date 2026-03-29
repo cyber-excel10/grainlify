@@ -194,7 +194,7 @@
                                 "symbol": "fee_recipient"
                               },
                               "val": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                               }
                             },
                             {
@@ -210,7 +210,29 @@
                             },
                             {
                               "key": {
+                                "symbol": "lock_fixed_fee"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 0
+                                }
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "payout_fee_rate"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 0
+                                }
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "payout_fixed_fee"
                               },
                               "val": {
                                 "i128": {
@@ -238,10 +260,38 @@
                           "map": [
                             {
                               "key": {
+                                "symbol": "archived"
+                              },
+                              "val": {
+                                "bool": false
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "archived_at"
+                              },
+                              "val": "void"
+                            },
+                            {
+                              "key": {
                                 "symbol": "authorized_payout_key"
                               },
                               "val": {
                                 "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "delegate"
+                              },
+                              "val": "void"
+                            },
+                            {
+                              "key": {
+                                "symbol": "delegate_permissions"
+                              },
+                              "val": {
+                                "u32": 0
                               }
                             },
                             {
@@ -253,6 +303,61 @@
                                   "hi": 0,
                                   "lo": 0
                                 }
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "metadata"
+                              },
+                              "val": {
+                                "map": [
+                                  {
+                                    "key": {
+                                      "symbol": "custom_fields"
+                                    },
+                                    "val": {
+                                      "vec": []
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "ecosystem"
+                                    },
+                                    "val": "void"
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "end_date"
+                                    },
+                                    "val": "void"
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "program_name"
+                                    },
+                                    "val": "void"
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "program_type"
+                                    },
+                                    "val": "void"
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "start_date"
+                                    },
+                                    "val": "void"
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "tags"
+                                    },
+                                    "val": {
+                                      "vec": []
+                                    }
+                                  }
+                                ]
                               }
                             },
                             {
@@ -314,6 +419,18 @@
                                   "lo": 100000
                                 }
                               }
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "ProgReg"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "string": "hack-2026"
                             }
                           ]
                         }
@@ -451,10 +568,38 @@
                           "map": [
                             {
                               "key": {
+                                "symbol": "archived"
+                              },
+                              "val": {
+                                "bool": false
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "archived_at"
+                              },
+                              "val": "void"
+                            },
+                            {
+                              "key": {
                                 "symbol": "authorized_payout_key"
                               },
                               "val": {
                                 "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "delegate"
+                              },
+                              "val": "void"
+                            },
+                            {
+                              "key": {
+                                "symbol": "delegate_permissions"
+                              },
+                              "val": {
+                                "u32": 0
                               }
                             },
                             {
@@ -466,6 +611,61 @@
                                   "hi": 0,
                                   "lo": 0
                                 }
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "metadata"
+                              },
+                              "val": {
+                                "map": [
+                                  {
+                                    "key": {
+                                      "symbol": "custom_fields"
+                                    },
+                                    "val": {
+                                      "vec": []
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "ecosystem"
+                                    },
+                                    "val": "void"
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "end_date"
+                                    },
+                                    "val": "void"
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "program_name"
+                                    },
+                                    "val": "void"
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "program_type"
+                                    },
+                                    "val": "void"
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "start_date"
+                                    },
+                                    "val": "void"
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "tags"
+                                    },
+                                    "val": {
+                                      "vec": []
+                                    }
+                                  }
+                                ]
                               }
                             },
                             {
@@ -1211,10 +1411,38 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "archived"
+                  },
+                  "val": {
+                    "bool": false
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "archived_at"
+                  },
+                  "val": "void"
+                },
+                {
+                  "key": {
                     "symbol": "authorized_payout_key"
                   },
                   "val": {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "delegate"
+                  },
+                  "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "delegate_permissions"
+                  },
+                  "val": {
+                    "u32": 0
                   }
                 },
                 {
@@ -1226,6 +1454,61 @@
                       "hi": 0,
                       "lo": 0
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "metadata"
+                  },
+                  "val": {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "custom_fields"
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "ecosystem"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "end_date"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "program_name"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "program_type"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "start_date"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "tags"
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      }
+                    ]
                   }
                 },
                 {
@@ -1402,10 +1685,38 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "archived"
+                  },
+                  "val": {
+                    "bool": false
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "archived_at"
+                  },
+                  "val": "void"
+                },
+                {
+                  "key": {
                     "symbol": "authorized_payout_key"
                   },
                   "val": {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "delegate"
+                  },
+                  "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "delegate_permissions"
+                  },
+                  "val": {
+                    "u32": 0
                   }
                 },
                 {
@@ -1417,6 +1728,61 @@
                       "hi": 0,
                       "lo": 0
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "metadata"
+                  },
+                  "val": {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "custom_fields"
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "ecosystem"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "end_date"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "program_name"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "program_type"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "start_date"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "tags"
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      }
+                    ]
                   }
                 },
                 {
@@ -1874,10 +2240,38 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "archived"
+                  },
+                  "val": {
+                    "bool": false
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "archived_at"
+                  },
+                  "val": "void"
+                },
+                {
+                  "key": {
                     "symbol": "authorized_payout_key"
                   },
                   "val": {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "delegate"
+                  },
+                  "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "delegate_permissions"
+                  },
+                  "val": {
+                    "u32": 0
                   }
                 },
                 {
@@ -1889,6 +2283,61 @@
                       "hi": 0,
                       "lo": 0
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "metadata"
+                  },
+                  "val": {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "custom_fields"
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "ecosystem"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "end_date"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "program_name"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "program_type"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "start_date"
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "symbol": "tags"
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      }
+                    ]
                   }
                 },
                 {
