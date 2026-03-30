@@ -1113,6 +1113,7 @@ mod test_token_math;
 #[cfg(test)]
 mod test_storage_layout;
 // mod test_payout_splits;
+mod test_batch_limits;
 
 // ========================================================================
 // Contract Implementation
@@ -2827,6 +2828,10 @@ impl ProgramEscrowContract {
         if recipients.len() == 0 {
             reentrancy_guard::clear_entered(&env);
             panic!("Cannot process empty batch");
+        }
+        if recipients.len() > MAX_BATCH_SIZE {
+            reentrancy_guard::clear_entered(&env);
+            panic!("Batch size exceeds MAX_BATCH_SIZE limit of 100");
         }
 
         // Calculate total payout amount
