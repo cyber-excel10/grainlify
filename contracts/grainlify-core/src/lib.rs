@@ -527,8 +527,6 @@ mod monitoring {
 #[cfg(all(test, feature = "wasm_tests"))]
 mod test_core_monitoring;
 #[cfg(test)]
-mod test_strict_mode;
-#[cfg(test)]
 mod test_pseudo_randomness;
 #[cfg(all(test, feature = "wasm_tests"))]
 mod test_serialization_compatibility;
@@ -536,6 +534,8 @@ mod test_serialization_compatibility;
 mod test_storage_layout;
 #[cfg(all(test, feature = "wasm_tests"))]
 mod test_version_helpers;
+#[cfg(test)]
+mod test_strict_mode;
 
 // ==================== END MONITORING MODULE ====================
 
@@ -692,7 +692,7 @@ pub const STORAGE_SCHEMA_VERSION: u32 = 1;
 const CONFIG_SNAPSHOT_LIMIT: u32 = 20;
 
 /// Default timelock delay for upgrade execution (24 hours in seconds)
-/// 
+///
 /// This delay provides a security window where users can review
 /// upgrade proposals and prepare for potential emergencies.
 /// The delay can be adjusted by admin via `set_timelock_delay()`.
@@ -1029,11 +1029,7 @@ impl GrainlifyContract {
             contract_is_initialized(&env),
             "Strict mode: contract not initialized after init_admin",
         );
-        strict_mode::strict_emit(
-            &env,
-            symbol_short!("init"),
-            symbol_short!("ok"),
-        );
+        strict_mode::strict_emit(&env, symbol_short!("init"), symbol_short!("ok"));
     }
 
     /// Initializes the contract with governance-augmented setup.
@@ -1229,21 +1225,25 @@ impl GrainlifyContract {
     /// - If the proposal has been cancelled.
     pub fn approve_upgrade(env: Env, proposal_id: u64, signer: Address) {
         MultiSig::approve(&env, proposal_id, signer);
-        
+
         // Check if this approval met the threshold and timelock should start
         if MultiSig::can_execute(&env, proposal_id) {
             let current_time = env.ledger().timestamp();
-            
+
             // Only set timelock if not already set (idempotent)
-            if !env.storage().instance().has(&DataKey::UpgradeTimelock(proposal_id)) {
+            if !env
+                .storage()
+                .instance()
+                .has(&DataKey::UpgradeTimelock(proposal_id))
+            {
                 env.storage()
                     .instance()
                     .set(&DataKey::UpgradeTimelock(proposal_id), &current_time);
-                
+
                 // Emit timelock start event
                 env.events().publish(
                     (symbol_short!("timelock"), symbol_short!("started")),
-                    (proposal_id, current_time)
+                    (proposal_id, current_time),
                 );
             }
         }
@@ -1286,7 +1286,7 @@ impl GrainlifyContract {
     pub fn get_upgrade_proposal(env: Env, proposal_id: u64) -> Option<UpgradeProposalRecord> {
         Self::load_upgrade_proposal(&env, proposal_id)
     }
-    
+
     /// Returns the current timelock delay period for upgrade execution.
     ///
     /// # Returns
@@ -1300,7 +1300,7 @@ impl GrainlifyContract {
             .get(&DataKey::TimelockDelay)
             .unwrap_or(DEFAULT_TIMELOCK_DELAY)
     }
-    
+
     /// Sets the timelock delay period for upgrade execution (admin only).
     ///
     /// # Arguments
@@ -1320,26 +1320,26 @@ impl GrainlifyContract {
     pub fn set_timelock_delay(env: Env, delay_seconds: u64) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
-        
+
         Self::require_not_read_only(&env);
-        
+
         // Enforce minimum delay of 1 hour for security
         if delay_seconds < 3600 {
             panic!("Timelock delay must be at least 1 hour (3600 seconds)");
         }
-        
+
         let old_delay = Self::get_timelock_delay(env.clone());
         env.storage()
             .instance()
             .set(&DataKey::TimelockDelay, &delay_seconds);
-        
+
         // Emit configuration change event
         env.events().publish(
             (symbol_short!("timelock"), symbol_short!("dly_chg")),
             (old_delay, delay_seconds)
         );
     }
-    
+
     /// Returns the timelock status for an upgrade proposal.
     ///
     /// # Arguments
@@ -1354,11 +1354,15 @@ impl GrainlifyContract {
     /// - Some(0): Timelock completed, ready to execute
     /// - Some(n): N seconds remaining before execution
     pub fn get_timelock_status(env: Env, proposal_id: u64) -> Option<u64> {
-        if let Some(timelock_start) = env.storage().instance().get(&DataKey::UpgradeTimelock(proposal_id)) {
+        if let Some(timelock_start) = env
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeTimelock(proposal_id))
+        {
             let timelock_delay = Self::get_timelock_delay(env.clone());
             let current_time = env.ledger().timestamp();
             let elapsed = current_time.saturating_sub(timelock_start);
-            
+
             if elapsed >= timelock_delay {
                 Some(0) // Ready to execute
             } else {
@@ -1531,23 +1535,23 @@ impl GrainlifyContract {
             );
             panic!("Threshold not met or proposal not executable");
         }
-        
+
         // Enforce timelock delay
         let timelock_start: u64 = env
             .storage()
             .instance()
             .get(&DataKey::UpgradeTimelock(proposal_id))
             .unwrap_or_else(|| panic!("Timelock not started - call approve_upgrade first"));
-        
+
         let timelock_delay: u64 = env
             .storage()
             .instance()
             .get(&DataKey::TimelockDelay)
             .unwrap_or(DEFAULT_TIMELOCK_DELAY);
-        
+
         let current_time = env.ledger().timestamp();
         let elapsed = current_time.saturating_sub(timelock_start);
-        
+
         if elapsed < timelock_delay {
             let remaining = timelock_delay.saturating_sub(elapsed);
             monitoring::track_operation(
@@ -1585,7 +1589,7 @@ impl GrainlifyContract {
 
         // Mark proposal as executed (prevents re-execution)
         MultiSig::mark_executed(&env, proposal_id);
-        
+
         // Clean up timelock data
         env.storage()
             .instance()
@@ -1676,11 +1680,7 @@ impl GrainlifyContract {
                 report.healthy,
                 "Strict mode: contract invariants unhealthy before upgrade",
             );
-            strict_mode::strict_emit(
-                &env,
-                symbol_short!("upgrade"),
-                symbol_short!("pre_chk"),
-            );
+            strict_mode::strict_emit(&env, symbol_short!("upgrade"), symbol_short!("pre_chk"));
         }
 
         // Verify admin is set (contract initialized).

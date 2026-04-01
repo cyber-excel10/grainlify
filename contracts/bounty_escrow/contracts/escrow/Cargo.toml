@@ -18,7 +18,6 @@ testutils = []
 [dependencies]
 soroban-sdk = { workspace = true }
 grainlify-core = { path = "../../../grainlify-core", default-features = false }
-grainlify-contracts = { path = "../../../" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["alloc", "testutils"] }

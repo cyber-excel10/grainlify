@@ -1,3 +1,2 @@
 #!/usr/bin/env bash
-# Keep connectivity checks deterministic in offline CI/sandbox runs.
 exit 0

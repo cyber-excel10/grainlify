@@ -3,10 +3,10 @@
 //! Comprehensive test suite to ensure storage key namespace isolation
 //! and prevent cross-contract storage collisions.
 
-use soroban_sdk::{Env, Symbol};
 use grainlify_contracts::storage_key_audit::{
-    program_escrow, bounty_escrow, shared, validation, namespaces,
+    bounty_escrow, namespaces, program_escrow, shared, validation,
 };
+use soroban_sdk::{Env, Symbol};
 
 #[cfg(test)]
 mod collision_tests {
@@ -16,7 +16,7 @@ mod collision_tests {
     #[test]
     fn test_program_escrow_namespace_compliance() {
         let env = Env::default();
-        
+
         let program_symbols = vec![
             &env,
             program_escrow::PROGRAM_INITIALIZED,
@@ -51,9 +51,12 @@ mod collision_tests {
 
         for symbol in program_symbols.iter() {
             let result = validation::validate_storage_key(*symbol, namespaces::PROGRAM_ESCROW);
-            assert!(result.is_ok(), 
-                "Program escrow symbol {:?} should validate with PE_ prefix: {:?}", 
-                symbol, result.err());
+            assert!(
+                result.is_ok(),
+                "Program escrow symbol {:?} should validate with PE_ prefix: {:?}",
+                symbol,
+                result.err()
+            );
         }
     }
 
@@ -61,7 +64,7 @@ mod collision_tests {
     #[test]
     fn test_bounty_escrow_namespace_compliance() {
         let env = Env::default();
-        
+
         let bounty_symbols = vec![
             &env,
             bounty_escrow::BOUNTY_INITIALIZED,
@@ -114,9 +117,12 @@ mod collision_tests {
 
         for symbol in bounty_symbols.iter() {
             let result = validation::validate_storage_key(*symbol, namespaces::BOUNTY_ESCROW);
-            assert!(result.is_ok(), 
-                "Bounty escrow symbol {:?} should validate with BE_ prefix: {:?}", 
-                symbol, result.err());
+            assert!(
+                result.is_ok(),
+                "Bounty escrow symbol {:?} should validate with BE_ prefix: {:?}",
+                symbol,
+                result.err()
+            );
         }
     }
 
@@ -124,7 +130,7 @@ mod collision_tests {
     #[test]
     fn test_cross_namespace_isolation() {
         let env = Env::default();
-        
+
         // Program escrow symbols should NOT validate with bounty prefix
         let program_symbols = vec![
             &env,
@@ -132,12 +138,14 @@ mod collision_tests {
             program_escrow::PROGRAM_DATA,
             program_escrow::FEE_CONFIG,
         ];
-        
+
         for symbol in program_symbols.iter() {
             let result = validation::validate_storage_key(*symbol, namespaces::BOUNTY_ESCROW);
-            assert!(result.is_err(), 
-                "Program escrow symbol {:?} should NOT validate with BE_ prefix", 
-                symbol);
+            assert!(
+                result.is_err(),
+                "Program escrow symbol {:?} should NOT validate with BE_ prefix",
+                symbol
+            );
         }
 
         // Bounty escrow symbols should NOT validate with program prefix
@@ -147,12 +155,14 @@ mod collision_tests {
             bounty_escrow::ADMIN,
             bounty_escrow::FEE_CONFIG,
         ];
-        
+
         for symbol in bounty_symbols.iter() {
             let result = validation::validate_storage_key(*symbol, namespaces::PROGRAM_ESCROW);
-            assert!(result.is_err(), 
-                "Bounty escrow symbol {:?} should NOT validate with PE_ prefix", 
-                symbol);
+            assert!(
+                result.is_err(),
+                "Bounty escrow symbol {:?} should NOT validate with PE_ prefix",
+                symbol
+            );
         }
     }
 
@@ -160,10 +170,10 @@ mod collision_tests {
     #[test]
     fn test_no_duplicate_symbols() {
         let env = Env::default();
-        
+
         // Collect all symbols as strings for comparison
         let mut all_symbols = std::collections::HashSet::new();
-        
+
         // Program escrow symbols
         let program_symbols = vec![
             program_escrow::PROGRAM_INITIALIZED,
@@ -171,8 +181,8 @@ mod collision_tests {
             program_escrow::PROGRAM_DATA,
             program_escrow::FEE_CONFIG,
         ];
-        
-        // Bounty escrow symbols  
+
+        // Bounty escrow symbols
         let bounty_symbols = vec![
             bounty_escrow::BOUNTY_INITIALIZED,
             bounty_escrow::FUNDS_LOCKED,
@@ -183,16 +193,22 @@ mod collision_tests {
         // Check program escrow symbols for duplicates
         for symbol in program_symbols.iter() {
             let symbol_str = symbol.to_string();
-            assert!(!all_symbols.contains(&symbol_str), 
-                "Duplicate program escrow symbol found: {}", symbol_str);
+            assert!(
+                !all_symbols.contains(&symbol_str),
+                "Duplicate program escrow symbol found: {}",
+                symbol_str
+            );
             all_symbols.insert(symbol_str);
         }
 
         // Check bounty escrow symbols for duplicates
         for symbol in bounty_symbols.iter() {
             let symbol_str = symbol.to_string();
-            assert!(!all_symbols.contains(&symbol_str), 
-                "Duplicate bounty escrow symbol found: {}", symbol_str);
+            assert!(
+                !all_symbols.contains(&symbol_str),
+                "Duplicate bounty escrow symbol found: {}",
+                symbol_str
+            );
             all_symbols.insert(symbol_str);
         }
     }
@@ -211,52 +227,76 @@ mod collision_tests {
     /// Test namespace prefix validation
     #[test]
     fn test_namespace_prefix_validation() {
-        assert!(validation::validate_namespace("PE_Test", namespaces::PROGRAM_ESCROW));
-        assert!(!validation::validate_namespace("BE_Test", namespaces::PROGRAM_ESCROW));
-        assert!(!validation::validate_namespace("Test", namespaces::PROGRAM_ESCROW));
-        
-        assert!(validation::validate_namespace("BE_Test", namespaces::BOUNTY_ESCROW));
-        assert!(!validation::validate_namespace("PE_Test", namespaces::BOUNTY_ESCROW));
-        assert!(!validation::validate_namespace("Test", namespaces::BOUNTY_ESCROW));
+        assert!(validation::validate_namespace(
+            "PE_Test",
+            namespaces::PROGRAM_ESCROW
+        ));
+        assert!(!validation::validate_namespace(
+            "BE_Test",
+            namespaces::PROGRAM_ESCROW
+        ));
+        assert!(!validation::validate_namespace(
+            "Test",
+            namespaces::PROGRAM_ESCROW
+        ));
+
+        assert!(validation::validate_namespace(
+            "BE_Test",
+            namespaces::BOUNTY_ESCROW
+        ));
+        assert!(!validation::validate_namespace(
+            "PE_Test",
+            namespaces::BOUNTY_ESCROW
+        ));
+        assert!(!validation::validate_namespace(
+            "Test",
+            namespaces::BOUNTY_ESCROW
+        ));
     }
 
     /// Test storage migration safety - ensure no key remapping during upgrades
     #[test]
     fn test_storage_migration_safety() {
         let env = Env::default();
-        
+
         // Simulate storage keys that would be problematic during migration
         let problematic_keys = vec![
-            "Admin",           // Too generic, could collide
-            "Token",          // Too generic, could collide  
-            "FeeConfig",       // Same name in both contracts (before namespacing)
-            "PauseFlags",      // Same name in both contracts (before namespacing)
+            "Admin",      // Too generic, could collide
+            "Token",      // Too generic, could collide
+            "FeeConfig",  // Same name in both contracts (before namespacing)
+            "PauseFlags", // Same name in both contracts (before namespacing)
         ];
-        
+
         // Ensure all actual keys are properly namespaced
         let program_keys = vec![
             program_escrow::PROGRAM_DATA,
             program_escrow::FEE_CONFIG,
             program_escrow::PAUSE_FLAGS,
         ];
-        
+
         let bounty_keys = vec![
             bounty_escrow::ADMIN,
             bounty_escrow::TOKEN,
             bounty_escrow::FEE_CONFIG,
             bounty_escrow::PAUSE_FLAGS,
         ];
-        
+
         // All keys should be properly namespaced
         for key in program_keys.iter().chain(bounty_keys.iter()) {
             let key_str = key.to_string();
-            assert!(key_str.starts_with("PE_") || key_str.starts_with("BE_"), 
-                "Key {} should be properly namespaced", key_str);
-            
+            assert!(
+                key_str.starts_with("PE_") || key_str.starts_with("BE_"),
+                "Key {} should be properly namespaced",
+                key_str
+            );
+
             // Should not match any problematic patterns
             for problematic in &problematic_keys {
-                assert_ne!(key_str, *problematic, 
-                    "Key {} matches problematic pattern {}", key_str, problematic);
+                assert_ne!(
+                    key_str, *problematic,
+                    "Key {} matches problematic pattern {}",
+                    key_str, problematic
+                );
             }
         }
     }
@@ -265,26 +305,28 @@ mod collision_tests {
     #[test]
     fn test_symbol_length_constraints() {
         let env = Env::default();
-        
+
         let all_symbols = vec![
             // Program escrow symbols
             program_escrow::PROGRAM_INITIALIZED,
             program_escrow::FUNDS_LOCKED,
             program_escrow::PROGRAM_DATA,
             program_escrow::FEE_CONFIG,
-            
             // Bounty escrow symbols
             bounty_escrow::BOUNTY_INITIALIZED,
             bounty_escrow::FUNDS_LOCKED,
             bounty_escrow::ADMIN,
             bounty_escrow::FEE_CONFIG,
         ];
-        
+
         for symbol in all_symbols.iter() {
             let symbol_str = symbol.to_string();
-            assert!(symbol_str.len() <= 9, 
-                "Symbol {} exceeds 9-byte limit: {} bytes", 
-                symbol_str, symbol_str.len());
+            assert!(
+                symbol_str.len() <= 9,
+                "Symbol {} exceeds 9-byte limit: {} bytes",
+                symbol_str,
+                symbol_str.len()
+            );
         }
     }
 }
@@ -297,25 +339,27 @@ mod regression_tests {
     #[test]
     fn test_previous_collision_risks_resolved() {
         let env = Env::default();
-        
+
         // These were the problematic keys before namespacing:
         // - Both contracts used "Admin", "Token", "FeeConfig", "PauseFlags"
         // - Both used similar event symbols without prefixes
-        
+
         // Verify program escrow uses PE_ prefix
         let pe_admin = program_escrow::PROGRAM_DATA; // Was "ProgData" -> "PE_ProgData"
-        let pe_fee_config = program_escrow::FEE_CONFIG;   // Was "FeeCfg" -> "PE_FeeCfg"
-        
+        let pe_fee_config = program_escrow::FEE_CONFIG; // Was "FeeCfg" -> "PE_FeeCfg"
+
         assert!(validation::validate_storage_key(pe_admin, namespaces::PROGRAM_ESCROW).is_ok());
-        assert!(validation::validate_storage_key(pe_fee_config, namespaces::PROGRAM_ESCROW).is_ok());
-        
+        assert!(
+            validation::validate_storage_key(pe_fee_config, namespaces::PROGRAM_ESCROW).is_ok()
+        );
+
         // Verify bounty escrow uses BE_ prefix
-        let be_admin = bounty_escrow::ADMIN;           // Was "Admin" -> "BE_Admin"
-        let be_fee_config = bounty_escrow::FEE_CONFIG;   // Was "FeeConfig" -> "BE_FeeCfg"
-        
+        let be_admin = bounty_escrow::ADMIN; // Was "Admin" -> "BE_Admin"
+        let be_fee_config = bounty_escrow::FEE_CONFIG; // Was "FeeConfig" -> "BE_FeeCfg"
+
         assert!(validation::validate_storage_key(be_admin, namespaces::BOUNTY_ESCROW).is_ok());
         assert!(validation::validate_storage_key(be_fee_config, namespaces::BOUNTY_ESCROW).is_ok());
-        
+
         // Verify cross-pollination is prevented
         assert!(validation::validate_storage_key(pe_admin, namespaces::BOUNTY_ESCROW).is_err());
         assert!(validation::validate_storage_key(be_admin, namespaces::PROGRAM_ESCROW).is_err());
@@ -325,26 +369,38 @@ mod regression_tests {
     #[test]
     fn test_event_symbol_isolation() {
         let env = Env::default();
-        
+
         // Both contracts had similar event names before namespacing
-        let pe_funds_locked = program_escrow::FUNDS_LOCKED;      // "PE_FndsLock"
-        let be_funds_locked = bounty_escrow::FUNDS_LOCKED;      // "BE_f_lock"
-        
-        let pe_pause_changed = program_escrow::PAUSE_STATE_CHANGED;  // "PE_PauseSt"
-        let be_pause_changed = bounty_escrow::PAUSE_STATE_CHANGED;  // "BE_pause"
-        
+        let pe_funds_locked = program_escrow::FUNDS_LOCKED; // "PE_FndsLock"
+        let be_funds_locked = bounty_escrow::FUNDS_LOCKED; // "BE_f_lock"
+
+        let pe_pause_changed = program_escrow::PAUSE_STATE_CHANGED; // "PE_PauseSt"
+        let be_pause_changed = bounty_escrow::PAUSE_STATE_CHANGED; // "BE_pause"
+
         // Should be different symbols
         assert_ne!(pe_funds_locked, be_funds_locked);
         assert_ne!(pe_pause_changed, be_pause_changed);
-        
+
         // Should validate with correct namespaces
-        assert!(validation::validate_storage_key(pe_funds_locked, namespaces::PROGRAM_ESCROW).is_ok());
-        assert!(validation::validate_storage_key(be_funds_locked, namespaces::BOUNTY_ESCROW).is_ok());
-        assert!(validation::validate_storage_key(pe_pause_changed, namespaces::PROGRAM_ESCROW).is_ok());
-        assert!(validation::validate_storage_key(be_pause_changed, namespaces::BOUNTY_ESCROW).is_ok());
-        
+        assert!(
+            validation::validate_storage_key(pe_funds_locked, namespaces::PROGRAM_ESCROW).is_ok()
+        );
+        assert!(
+            validation::validate_storage_key(be_funds_locked, namespaces::BOUNTY_ESCROW).is_ok()
+        );
+        assert!(
+            validation::validate_storage_key(pe_pause_changed, namespaces::PROGRAM_ESCROW).is_ok()
+        );
+        assert!(
+            validation::validate_storage_key(be_pause_changed, namespaces::BOUNTY_ESCROW).is_ok()
+        );
+
         // Should not validate with wrong namespaces
-        assert!(validation::validate_storage_key(pe_funds_locked, namespaces::BOUNTY_ESCROW).is_err());
-        assert!(validation::validate_storage_key(be_funds_locked, namespaces::PROGRAM_ESCROW).is_err());
+        assert!(
+            validation::validate_storage_key(pe_funds_locked, namespaces::BOUNTY_ESCROW).is_err()
+        );
+        assert!(
+            validation::validate_storage_key(be_funds_locked, namespaces::PROGRAM_ESCROW).is_err()
+        );
     }
 }

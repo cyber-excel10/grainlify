@@ -49,7 +49,7 @@ Program:
 - `revoke_program_delegate`
 - `single_payout_by`
 - `batch_payout_by`
-- `create_program_release_schedule_by`
+- `create_prog_release_schedule_by`
 - `trigger_program_releases_by`
 - `release_prog_schedule_manual_by`
 - `update_program_metadata`

@@ -569,7 +569,7 @@ pub fn validate_upgrade(env: &Env) -> Result<(), Error> {
         if !report.errors.is_empty() {
             // For simplicity, we return a generic error
             // In production, you might want more specific error codes
-            return Err(Error::UpgradeSafetyFailed);
+            return Err(Error::UpgradeSafetyCheckFailed);
         }
     }
 

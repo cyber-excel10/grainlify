@@ -17,6 +17,44 @@ touch "$EMPTY_WASM"  # Empty file
 fail() { echo "✘ FAIL: $1"; exit 1; }
 pass() { echo "✔ PASS: $1"; }
 
+MOCK_BIN="$(pwd)/mock_bin"
+mkdir -p "$MOCK_BIN"
+ORIGINAL_PATH="$PATH"
+
+enable_invalid_identity_with_network_mock() {
+    cat > "$MOCK_BIN/stellar" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" = "keys" && "$2" = "address" ]]; then
+    echo "Identity not found" >&2
+    exit 1
+fi
+echo "Mock stellar call"
+exit 0
+EOF
+
+    cat > "$MOCK_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+
+    chmod +x "$MOCK_BIN/stellar" "$MOCK_BIN/curl"
+    export PATH="$MOCK_BIN:$ORIGINAL_PATH"
+}
+
+disable_mocks() {
+    export PATH="$ORIGINAL_PATH"
+}
+
+enable_network_mock() {
+    rm -f "$MOCK_BIN/stellar" "$MOCK_BIN/soroban"
+    cat > "$MOCK_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+    chmod +x "$MOCK_BIN/curl"
+    export PATH="$MOCK_BIN:$ORIGINAL_PATH"
+}
+
 run_expect_fail() {
     desc="$1"
     expected_msg="$2"
@@ -98,23 +136,28 @@ run_expect_fail "Empty WASM file" "WASM file is empty" \
     "$EMPTY_WASM"
 
 #  7. Invalid network
+echo -n -e "\x00\x61\x73\x6D\x01" > "$FAKE_WASM"
 run_expect_fail "Invalid network" "Invalid network" \
     "C1234567890123456789012345678901234567890123456789012345678" \
     "$FAKE_WASM" -n "invalid_network"
 
 #  8. Invalid identity
+enable_invalid_identity_with_network_mock
 run_expect_fail "Missing identity" "Identity not found" \
     "C1234567890123456789012345678901234567890123456789012345678" \
     "$FAKE_WASM" \
     --source ghost_id
+disable_mocks
 
 #  9. Help should succeed
 run_expect_success "Help command works" "USAGE:" "$UPGRADE_SCRIPT" --help
 
 #  10. Dry run should work with valid inputs
+enable_network_mock
 run_expect_success "Dry run mode" "DRY RUN" \
     "C1234567890123456789012345678901234567890123456789012345678" \
     "$FAKE_WASM" --dry-run
+disable_mocks
 
 #  11. Unknown option handling
 run_expect_fail "Unknown option" "Unknown option" \

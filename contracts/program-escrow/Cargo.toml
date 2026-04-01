@@ -6,10 +6,6 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
-[features]
-default = []
-strict-mode = ["grainlify-core/strict-mode"]
-
 [dependencies]
 soroban-sdk = "=21.7.7"
 grainlify-core = { path = "../grainlify-core", default-features = false }

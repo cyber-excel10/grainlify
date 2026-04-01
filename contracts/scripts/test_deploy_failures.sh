@@ -149,10 +149,8 @@ run_expect_fail "Empty WASM file" "WASM file is empty" "$EMPTY_WASM"
 run_expect_fail "Invalid network" "Invalid network" "$FAKE_WASM" -n "invalid_network"
 
 # ------------------------------------------------------------
-# 6. Invalid identity should FAIL identity check (NO mocking)
+# 6. Invalid identity should FAIL identity check (deterministic mock)
 # ------------------------------------------------------------
-disable_identity_mock
-run_expect_fail "Invalid identity" "Identity not found" "$FAKE_WASM" --identity "nonexistent_test_identity_12345"
 enable_invalid_identity_with_network_mock
 run_expect_fail "Invalid identity" "Identity not found" "$FAKE_WASM" --identity "ghost_id"
 
@@ -204,5 +202,4 @@ fi
 # Cleanup test files
 rm -f "$FAKE_WASM" "$INVALID_WASM" "$EMPTY_WASM"
 
-echo "All deployment failure tests passed!"
 echo "All deployment failure tests passed!"

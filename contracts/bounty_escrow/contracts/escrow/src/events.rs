@@ -34,9 +34,6 @@
 use crate::CapabilityAction;
 use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Symbol};
 
-// Import storage key audit module for shared constants
-use grainlify_contracts::storage_key_audit::{shared, bounty_escrow as be_keys};
-
 // ── Version constant ─────────────────────────────────────────────────────────
 
 /// Canonical event schema version included in **every** event payload.
@@ -44,7 +41,7 @@ use grainlify_contracts::storage_key_audit::{shared, bounty_escrow as be_keys};
 /// Increment this value  and update all emitter functions whenever the
 /// payload schema changes in a breaking way.  Non-breaking additions that is new
 /// optional fields do not require a version bump.
-pub const EVENT_VERSION_V2: u32 = shared::EVENT_VERSION_V2;
+pub const EVENT_VERSION_V2: u32 = 2;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INITIALIZATION EVENTS
@@ -91,7 +88,7 @@ pub struct BountyEscrowInitialized {
 /// # Panics
 /// Never panics; publishing is infallible in Soroban.
 pub fn emit_bounty_initialized(env: &Env, event: BountyEscrowInitialized) {
-    let topics = (be_keys::BOUNTY_INITIALIZED,);
+    let topics = (symbol_short!("init"),);
     env.events().publish(topics, event.clone());
 }
 
@@ -853,11 +850,6 @@ pub fn emit_risk_flags_updated(env: &Env, event: RiskFlagsUpdated) {
 /// - The `beneficiary` field allows off-chain indexers to build a
 ///   per-address ticket inbox without scanning all tickets.
 
-pub fn emit_deprecation_state_changed(env: &Env, event: DeprecationStateChanged) {
-    let topics = (symbol_short!("deprec"),);
-    env.events().publish(topics, event);
-}
-
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NotificationPreferencesUpdated {
@@ -991,7 +983,7 @@ pub fn emit_emergency_withdraw(env: &Env, event: EmergencyWithdrawEvent) {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapabilityIssued {
     /// Monotonic capability id (matches [`crate::DataKey::Capability`]).
-    pub capability_id: u64,
+    pub capability_id: BytesN<32>,
     /// Address that created and vouches for this capability.
     pub owner: Address,
     /// Address authorised to exercise this capability.
@@ -1012,7 +1004,7 @@ pub struct CapabilityIssued {
 
 /// Emit [`CapabilityIssued`]
 pub fn emit_capability_issued(env: &Env, event: CapabilityIssued) {
-    let topics = (symbol_short!("cap_new"), event.capability_id);
+    let topics = (symbol_short!("cap_new"), event.capability_id.clone());
     env.events().publish(topics, event);
 }
 
@@ -1036,7 +1028,7 @@ pub fn emit_capability_issued(env: &Env, event: CapabilityIssued) {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapabilityUsed {
     /// Capability that was exercised.
-    pub capability_id: u64,
+    pub capability_id: BytesN<32>,
     /// Address that exercised the capability.
     pub holder: Address,
     /// Action that was performed.
@@ -1055,7 +1047,7 @@ pub struct CapabilityUsed {
 
 /// Emit [`CapabilityUsed`]
 pub fn emit_capability_used(env: &Env, event: CapabilityUsed) {
-    let topics = (symbol_short!("cap_use"), event.capability_id);
+    let topics = (symbol_short!("cap_use"), event.capability_id.clone());
     env.events().publish(topics, event);
 }
 
@@ -1078,14 +1070,14 @@ pub fn emit_capability_used(env: &Env, event: CapabilityUsed) {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapabilityRevoked {
     /// Capability that was revoked
-    pub capability_id: u64,
+    pub capability_id: BytesN<32>,
     pub owner: Address,
     pub revoked_at: u64,
 }
 
 /// Emit [`CapabilityRevoked`]
 pub fn emit_capability_revoked(env: &Env, event: CapabilityRevoked) {
-    let topics = (symbol_short!("cap_rev"), event.capability_id);
+    let topics = (symbol_short!("cap_rev"), event.capability_id.clone());
     env.events().publish(topics, event);
 }
 
@@ -1224,7 +1216,7 @@ pub fn emit_timelock_configured(env: &Env, event: TimelockConfigured) {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdminActionProposed {
     pub version: u32,
-    pub action_type: crate::ActionType,
+    pub action_type: CapabilityAction,
     pub execute_after: u64,
     pub proposed_by: Address,
     pub timestamp: u64,
@@ -1257,7 +1249,7 @@ pub fn emit_admin_action_proposed(env: &Env, event: AdminActionProposed) {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdminActionExecuted {
     pub version: u32,
-    pub action_type: crate::ActionType,
+    pub action_type: CapabilityAction,
     pub executed_by: Address,
     pub executed_at: u64,
 }
@@ -1289,7 +1281,7 @@ pub fn emit_admin_action_executed(env: &Env, event: AdminActionExecuted) {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdminActionCancelled {
     pub version: u32,
-    pub action_type: crate::ActionType,
+    pub action_type: CapabilityAction,
     pub cancelled_by: Address,
     pub cancelled_at: u64,
 }
