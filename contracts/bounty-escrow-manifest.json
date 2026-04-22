@@ -482,6 +482,18 @@
         "authorization": "any",
         "pausable": false,
         "gas_estimate": "low"
+      },
+      {
+        "name": "is_maintenance_mode",
+        "description": "Check if contract is in maintenance mode",
+        "parameters": [],
+        "returns": {
+          "type": "bool",
+          "description": "True if maintenance mode is active"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
       }
     ],
     "admin": [
@@ -687,6 +699,30 @@
             "name": "new_flags",
             "type": "u32",
             "description": "New bitmask of risk flags"
+          }
+        ],
+        "returns": {
+          "type": "()",
+          "description": "Empty on success"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "set_maintenance_mode",
+        "description": "Toggle global maintenance mode",
+        "parameters": [
+          {
+            "name": "enabled",
+            "type": "bool",
+            "description": "Enable or disable maintenance mode"
+          },
+          {
+            "name": "reason",
+            "type": "Option<String>",
+            "description": "Reason for maintenance mode toggle",
+            "optional": true
           }
         ],
         "returns": {

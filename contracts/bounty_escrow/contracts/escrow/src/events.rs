@@ -743,8 +743,8 @@ pub fn emit_deprecation_state_changed(env: &Env, event: DeprecationStateChanged)
 /// Payload for the [`emit_maintenance_mode_changed`] event.
 ///
 /// Emitted when maintenance mode is toggled by the admin.
-/// When enabled, `lock_funds` returns `FundsPaused` (as if `lock_paused`
-/// were true).
+/// When enabled, all critical operations return `FundsPaused` 
+/// (superseding granular pause flags).
 ///
 /// ### Topics
 /// | Index | Value |
@@ -754,6 +754,7 @@ pub fn emit_deprecation_state_changed(env: &Env, event: DeprecationStateChanged)
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaintenanceModeChanged {
     pub enabled: bool,
+    pub reason: Option<soroban_sdk::String>,
     pub admin: Address,
     pub timestamp: u64,
 }
