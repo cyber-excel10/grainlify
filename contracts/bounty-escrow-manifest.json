@@ -760,12 +760,12 @@
       },
       {
         "name": "set_claim_window",
-        "description": "Set claim window duration",
+        "description": "Set claim window duration. Emits ClaimWindowSet audit event. Set to 0 to disable enforcement.",
         "parameters": [
           {
             "name": "claim_window",
             "type": "u64",
-            "description": "Seconds beneficiary has to claim"
+            "description": "Seconds beneficiary has to claim after authorization. 0 disables enforcement."
           }
         ],
         "returns": {

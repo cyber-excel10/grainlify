@@ -658,3 +658,300 @@ fn test_maintenance_mode_toggles_correctly() {
     setup.escrow.set_maintenance_mode(&false, &None);
     assert_eq!(setup.escrow.is_maintenance_mode(), false);
 }
+
+// ============================================================================
+// CLAIM-WINDOW VALIDATION TESTS (Issue #1031)
+// ============================================================================
+
+/// Helper: lock a bounty and authorize a claim with a given window.
+fn setup_claim_window_bounty(
+    setup: &TestSetup,
+    bounty_id: u64,
+    amount: i128,
+    claim_window_secs: u64,
+) -> Address {
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.escrow.set_claim_window(&claim_window_secs);
+    let recipient = Address::generate(&setup.env);
+    setup.escrow.authorize_claim(&bounty_id, &recipient, &DisputeReason::Other);
+    recipient
+}
+
+// --- set_claim_window ---
+
+#[test]
+fn test_set_claim_window_success() {
+    let setup = TestSetup::new();
+    // Should not panic; no return value to assert beyond no error.
+    setup.escrow.set_claim_window(&3600_u64);
+}
+
+#[test]
+fn test_set_claim_window_zero_disables_enforcement() {
+    let setup = TestSetup::new();
+    let bounty_id = 300;
+    let amount = 1_000;
+    // Set window to 0 — enforcement disabled.
+    setup.escrow.set_claim_window(&0_u64);
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
+    // Advance time far past any window — should still succeed because window == 0.
+    setup.env.ledger().set_timestamp(setup.env.ledger().timestamp() + 999_999);
+    setup.escrow.release_funds(&bounty_id, &setup.contributor);
+    assert_eq!(
+        setup.escrow.get_escrow_info(&bounty_id).status,
+        EscrowStatus::Released
+    );
+}
+
+// --- validate_claim_window: no pending claim ---
+
+#[test]
+fn test_release_without_pending_claim_skips_window_check() {
+    let setup = TestSetup::new();
+    let bounty_id = 301;
+    let amount = 1_000;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+    setup.escrow.set_claim_window(&60_u64);
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    // No authorize_claim called — no PendingClaim exists.
+    // release_funds should succeed regardless of window.
+    setup.escrow.release_funds(&bounty_id, &setup.contributor);
+    assert_eq!(
+        setup.escrow.get_escrow_info(&bounty_id).status,
+        EscrowStatus::Released
+    );
+}
+
+// --- validate_claim_window: claim within window ---
+
+#[test]
+fn test_claim_within_window_succeeds() {
+    let setup = TestSetup::new();
+    let bounty_id = 302;
+    let amount = 1_000;
+    let recipient = setup_claim_window_bounty(&setup, bounty_id, amount, 3_600);
+    // Still within the window — claim should succeed.
+    setup.escrow.claim(&bounty_id);
+    assert_eq!(
+        setup.escrow.get_escrow_info(&bounty_id).status,
+        EscrowStatus::Released
+    );
+    let _ = recipient; // used via authorize_claim
+}
+
+#[test]
+fn test_release_within_window_succeeds() {
+    let setup = TestSetup::new();
+    let bounty_id = 303;
+    let amount = 1_000;
+    let _recipient = setup_claim_window_bounty(&setup, bounty_id, amount, 3_600);
+    // Admin releases within the window — should succeed.
+    setup.escrow.release_funds(&bounty_id, &setup.contributor);
+    assert_eq!(
+        setup.escrow.get_escrow_info(&bounty_id).status,
+        EscrowStatus::Released
+    );
+}
+
+// --- validate_claim_window: claim at exact boundary ---
+
+#[test]
+fn test_claim_at_exact_window_boundary_succeeds() {
+    let setup = TestSetup::new();
+    let bounty_id = 304;
+    let amount = 1_000;
+    let window = 3_600_u64;
+    let now = setup.env.ledger().timestamp();
+    let deadline = now + 10_000;
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.escrow.set_claim_window(&window);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
+    // Advance to exactly expires_at (now + window).
+    setup.env.ledger().set_timestamp(now + window);
+    // At the boundary (now == expires_at) the window is still valid.
+    setup.escrow.claim(&bounty_id);
+    assert_eq!(
+        setup.escrow.get_escrow_info(&bounty_id).status,
+        EscrowStatus::Released
+    );
+}
+
+// --- validate_claim_window: expired window ---
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn test_claim_after_window_expires_fails() {
+    let setup = TestSetup::new();
+    let bounty_id = 305;
+    let amount = 1_000;
+    let window = 60_u64;
+    let now = setup.env.ledger().timestamp();
+    let deadline = now + 10_000;
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.escrow.set_claim_window(&window);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
+    // Advance past the window.
+    setup.env.ledger().set_timestamp(now + window + 1);
+    // Should panic with DeadlineNotPassed (#6).
+    setup.escrow.claim(&bounty_id);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn test_release_after_window_expires_fails() {
+    let setup = TestSetup::new();
+    let bounty_id = 306;
+    let amount = 1_000;
+    let window = 60_u64;
+    let now = setup.env.ledger().timestamp();
+    let deadline = now + 10_000;
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.escrow.set_claim_window(&window);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
+    // Advance past the window.
+    setup.env.ledger().set_timestamp(now + window + 1);
+    // Should panic with DeadlineNotPassed (#6).
+    setup.escrow.release_funds(&bounty_id, &setup.contributor);
+}
+
+// --- validate_claim_window: window not configured ---
+
+#[test]
+fn test_release_with_no_window_configured_succeeds() {
+    let setup = TestSetup::new();
+    let bounty_id = 307;
+    let amount = 1_000;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+    // No set_claim_window call — defaults to 0 (disabled).
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
+    // Advance time significantly — no window enforcement.
+    setup.env.ledger().set_timestamp(setup.env.ledger().timestamp() + 999_999);
+    setup.escrow.release_funds(&bounty_id, &setup.contributor);
+    assert_eq!(
+        setup.escrow.get_escrow_info(&bounty_id).status,
+        EscrowStatus::Released
+    );
+}
+
+// --- cancel then re-authorize ---
+
+#[test]
+fn test_cancel_expired_claim_then_authorize_new_window() {
+    let setup = TestSetup::new();
+    let bounty_id = 308;
+    let amount = 1_000;
+    let window = 60_u64;
+    let now = setup.env.ledger().timestamp();
+    let deadline = now + 10_000;
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.escrow.set_claim_window(&window);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
+    // Expire the first window.
+    setup.env.ledger().set_timestamp(now + window + 1);
+    // Admin cancels the stale claim.
+    setup.escrow.cancel_pending_claim(&bounty_id, &DisputeOutcome::CancelledByAdmin);
+    // Re-authorize with a fresh window.
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
+    // Claim should now succeed within the new window.
+    setup.escrow.claim(&bounty_id);
+    assert_eq!(
+        setup.escrow.get_escrow_info(&bounty_id).status,
+        EscrowStatus::Released
+    );
+}
+
+// --- isolation: window on one bounty does not affect another ---
+
+#[test]
+fn test_claim_window_isolation_between_bounties() {
+    let setup = TestSetup::new();
+    let bounty_a = 309;
+    let bounty_b = 310;
+    let amount = 1_000;
+    let window = 60_u64;
+    let now = setup.env.ledger().timestamp();
+    let deadline = now + 10_000;
+
+    setup.escrow.set_claim_window(&window);
+
+    // Lock both bounties.
+    setup.escrow.lock_funds(&setup.depositor, &bounty_a, &amount, &deadline);
+    setup.escrow.lock_funds(&setup.depositor, &bounty_b, &amount, &deadline);
+
+    // Authorize claim on bounty_a only.
+    setup.escrow.authorize_claim(&bounty_a, &setup.contributor, &DisputeReason::Other);
+
+    // Advance past the window for bounty_a.
+    setup.env.ledger().set_timestamp(now + window + 1);
+
+    // bounty_b has no pending claim — release should succeed.
+    setup.escrow.release_funds(&bounty_b, &setup.contributor);
+    assert_eq!(
+        setup.escrow.get_escrow_info(&bounty_b).status,
+        EscrowStatus::Released
+    );
+}
+
+// --- audit event emission ---
+
+#[test]
+fn test_set_claim_window_emits_event() {
+    let setup = TestSetup::new();
+    setup.escrow.set_claim_window(&7200_u64);
+    let events = setup.env.events().all();
+    let found = events.iter().any(|(_, topics, _)| {
+        topics.len() >= 1
+            && topics
+                .get(0)
+                .map(|t| t == soroban_sdk::Symbol::new(&setup.env, "cw_set").into_val(&setup.env))
+                .unwrap_or(false)
+    });
+    assert!(found, "ClaimWindowSet event not emitted");
+}
+
+#[test]
+fn test_claim_window_validated_event_emitted_on_success() {
+    let setup = TestSetup::new();
+    let bounty_id = 311;
+    let amount = 1_000;
+    let _recipient = setup_claim_window_bounty(&setup, bounty_id, amount, 3_600);
+    setup.escrow.claim(&bounty_id);
+    let events = setup.env.events().all();
+    let found = events.iter().any(|(_, topics, _)| {
+        topics.len() >= 1
+            && topics
+                .get(0)
+                .map(|t| t == soroban_sdk::Symbol::new(&setup.env, "cw_ok").into_val(&setup.env))
+                .unwrap_or(false)
+    });
+    assert!(found, "ClaimWindowValidated event not emitted");
+}
+
+#[test]
+fn test_claim_window_expired_event_emitted_on_failure() {
+    let setup = TestSetup::new();
+    let bounty_id = 312;
+    let amount = 1_000;
+    let window = 60_u64;
+    let now = setup.env.ledger().timestamp();
+    let deadline = now + 10_000;
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.escrow.set_claim_window(&window);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
+    setup.env.ledger().set_timestamp(now + window + 1);
+    // Attempt claim — will fail, but the expired event should be emitted.
+    let _ = setup.escrow.try_claim(&bounty_id);
+    let events = setup.env.events().all();
+    let found = events.iter().any(|(_, topics, _)| {
+        topics.len() >= 1
+            && topics
+                .get(0)
+                .map(|t| t == soroban_sdk::Symbol::new(&setup.env, "cw_exp").into_val(&setup.env))
+                .unwrap_or(false)
+    });
+    assert!(found, "ClaimWindowExpired event not emitted");
+}

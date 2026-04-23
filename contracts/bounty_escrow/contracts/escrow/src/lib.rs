@@ -41,6 +41,8 @@ use crate::events::{
     NotificationPreferencesUpdated, ParticipantFilterModeChanged, RefundApprovalConsumed,
     RefundApprovalSet, RefundTriggerType, RiskFlagsUpdated, TicketClaimed, TicketIssued,
     EVENT_VERSION_V2,
+    emit_claim_window_set, emit_claim_window_validated, emit_claim_window_expired,
+    ClaimWindowSet, ClaimWindowValidated, ClaimWindowExpired,
 };
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
@@ -4030,8 +4032,67 @@ impl BountyEscrowContract {
         Ok(())
     }
 
+    /// Validates that the current time is within the active claim window for `bounty_id`.
+    ///
+    /// # Semantics
+    /// - If no claim window is configured (0 or unset), validation is skipped (permissive).
+    /// - If a `PendingClaim` exists for the bounty, `now` must be `<= expires_at`.
+    /// - If no `PendingClaim` exists, validation is skipped (window not yet started).
+    ///
+    /// # Errors
+    /// Returns `Error::DeadlineNotPassed` when the claim window has expired.
+    fn validate_claim_window(env: Env, bounty_id: u64) -> Result<(), Error> {
+        let claim_window: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ClaimWindow)
+            .unwrap_or(0);
+
+        // No window configured — skip validation entirely.
+        if claim_window == 0 {
+            return Ok(());
+        }
+
+        // No pending claim — window hasn't started yet, skip.
+        let claim: ClaimRecord = match env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingClaim(bounty_id))
+        {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+
+        let now = env.ledger().timestamp();
+
+        if now > claim.expires_at {
+            emit_claim_window_expired(
+                &env,
+                ClaimWindowExpired {
+                    version: EVENT_VERSION_V2,
+                    bounty_id,
+                    now,
+                    expires_at: claim.expires_at,
+                },
+            );
+            return Err(Error::DeadlineNotPassed);
+        }
+
+        emit_claim_window_validated(
+            &env,
+            ClaimWindowValidated {
+                version: EVENT_VERSION_V2,
+                bounty_id,
+                now,
+                expires_at: claim.expires_at,
+            },
+        );
+        Ok(())
+    }
+
     /// Set the claim window duration (admin only).
-    /// claim_window: seconds beneficiary has to claim after release is authorized.
+    /// `claim_window`: seconds a beneficiary has to claim after release is authorized.
+    /// Set to `0` to disable claim-window enforcement.
     pub fn set_claim_window(env: Env, claim_window: u64) -> Result<(), Error> {
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::NotInitialized);
@@ -4041,6 +4102,15 @@ impl BountyEscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::ClaimWindow, &claim_window);
+        emit_claim_window_set(
+            &env,
+            ClaimWindowSet {
+                version: EVENT_VERSION_V2,
+                claim_window,
+                set_by: admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
         Ok(())
     }
 
