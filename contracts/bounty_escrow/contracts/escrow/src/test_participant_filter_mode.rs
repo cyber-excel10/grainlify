@@ -230,3 +230,41 @@ fn test_set_filter_mode_emits_event_and_persists() {
         ParticipantFilterMode::AllowlistOnly
     );
 }
+
+#[test]
+fn test_query_whitelist_pagination_semantics() {
+    let env = create_env();
+    let (client, depositor, other, _token) = setup(&env);
+    let third = Address::generate(&env);
+
+    client.set_whitelist_entry(&depositor, &true);
+    client.set_whitelist_entry(&other, &true);
+    client.set_whitelist_entry(&third, &true);
+
+    let page1 = client.query_whitelist(&0, &2);
+    assert_eq!(page1.len(), 2);
+
+    let page2 = client.query_whitelist(&2, &2);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2.get(0).unwrap(), third);
+
+    let page3 = client.query_whitelist(&10, &5);
+    assert_eq!(page3.len(), 0);
+}
+
+#[test]
+fn test_query_blocklist_pagination_and_mutation() {
+    let env = create_env();
+    let (client, depositor, other, _token) = setup(&env);
+
+    client.set_blocklist_entry(&depositor, &true);
+    client.set_blocklist_entry(&other, &true);
+
+    let initial = client.query_blocklist(&0, &10);
+    assert_eq!(initial.len(), 2);
+
+    client.set_blocklist_entry(&depositor, &false);
+    let after_remove = client.query_blocklist(&0, &10);
+    assert_eq!(after_remove.len(), 1);
+    assert_eq!(after_remove.get(0).unwrap(), other);
+}

@@ -129,6 +129,33 @@ fn test_refund_eligibility_eligible_with_admin_approval_before_deadline() {
     assert!(view.approval_present);
 }
 
+#[test]
+fn test_maintenance_mode_blocks_lock_but_not_release_or_refund_paths() {
+    let setup = TestSetup::new();
+    let bounty_id = 202;
+    let amount = 1000;
+    let deadline = setup.env.ledger().timestamp() + 100;
+
+    setup.escrow.set_maintenance_mode(&true);
+
+    // Lock should be blocked (maintenance mode acts like lock pause).
+    let res = setup
+        .escrow
+        .try_lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    assert!(matches!(res, Err(Ok(Error::FundsPaused))));
+
+    // Existing escrow should still be able to release/refund (maintenance mode only affects lock).
+    setup
+        .escrow
+        .set_maintenance_mode(&false);
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.escrow.set_maintenance_mode(&true);
+
+    setup.escrow.release_funds(&bounty_id, &setup.contributor);
+}
+
 // Valid transitions: Locked → Released
 #[test]
 fn test_locked_to_released() {
@@ -460,4 +487,119 @@ fn test_partially_refunded_to_released_fails() {
     setup.escrow.refund(&bounty_id);
 
     setup.escrow.release_funds(&bounty_id, &setup.contributor);
+}
+
+// ============================================================================
+// RISK FLAGS GOVERNANCE TESTS
+// ============================================================================
+
+#[test]
+fn test_update_risk_flags_success() {
+    let setup = TestSetup::new();
+    let bounty_id = 1;
+    let amount = 1000;
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    // Lock funds to create the initial escrow
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    // Verify initial risk flags are 0 (no metadata existed yet, fallback applied)
+    assert_eq!(setup.escrow.get_risk_flags(&bounty_id), 0);
+
+    // Update risk flags (e.g., HIGH_RISK = 1, UNDER_REVIEW = 2) -> Bitmask 3
+    let new_flags = 3;
+    setup.escrow.update_risk_flags(&bounty_id, &new_flags);
+
+    // Verify flags persisted in the EscrowMetadata struct
+    assert_eq!(setup.escrow.get_risk_flags(&bounty_id), new_flags);
+    
+    // Clear the flags
+    setup.escrow.update_risk_flags(&bounty_id, &0);
+    assert_eq!(setup.escrow.get_risk_flags(&bounty_id), 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #202)")]
+fn test_update_risk_flags_bounty_not_found() {
+    let setup = TestSetup::new();
+    let missing_bounty_id = 999;
+    
+    // Attempting to flag an escrow that does not exist should throw BountyNotFound (202)
+    setup.escrow.update_risk_flags(&missing_bounty_id, &1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #202)")]
+fn test_get_risk_flags_bounty_not_found() {
+    let setup = TestSetup::new();
+    let missing_bounty_id = 999;
+    
+    // Attempting to read flags from a missing escrow should fail
+    setup.escrow.get_risk_flags(&missing_bounty_id);
+}
+
+// ============================================================================
+// MAINTENANCE MODE HARDENING TESTS
+// ============================================================================
+
+#[test]
+#[should_panic(expected = "Error(Contract, #18)")]
+fn test_maintenance_mode_halts_lock() {
+    let setup = TestSetup::new();
+    let reason = soroban_sdk::String::from_str(&setup.env, "Emergency upgrade");
+    setup.escrow.set_maintenance_mode(&true, &Some(reason));
+    
+    let bounty_id = 1;
+    let amount = 1000;
+    let deadline = setup.env.ledger().timestamp() + 1000;
+    
+    // Should panic with FundsPaused (18)
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #18)")]
+fn test_maintenance_mode_halts_release() {
+    let setup = TestSetup::new();
+    let bounty_id = 1;
+    let amount = 1000;
+    let deadline = setup.env.ledger().timestamp() + 1000;
+    
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    
+    setup.escrow.set_maintenance_mode(&true, &None);
+    
+    // Should panic with FundsPaused (18)
+    setup.escrow.release_funds(&bounty_id, &setup.contributor);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #18)")]
+fn test_maintenance_mode_halts_refund() {
+    let setup = TestSetup::new();
+    let bounty_id = 1;
+    let amount = 1000;
+    let deadline = setup.env.ledger().timestamp() + 100;
+    
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.env.ledger().set_timestamp(deadline + 1);
+    
+    setup.escrow.set_maintenance_mode(&true, &None);
+    
+    // Should panic with FundsPaused (18)
+    setup.escrow.refund(&bounty_id);
+}
+
+#[test]
+fn test_maintenance_mode_toggles_correctly() {
+    let setup = TestSetup::new();
+    let reason = soroban_sdk::String::from_str(&setup.env, "Routine sync");
+    
+    assert_eq!(setup.escrow.is_maintenance_mode(), false);
+    
+    setup.escrow.set_maintenance_mode(&true, &Some(reason));
+    assert_eq!(setup.escrow.is_maintenance_mode(), true);
+    
+    setup.escrow.set_maintenance_mode(&false, &None);
+    assert_eq!(setup.escrow.is_maintenance_mode(), false);
 }

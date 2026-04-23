@@ -777,8 +777,8 @@ pub fn emit_deprecation_state_changed(env: &Env, event: DeprecationStateChanged)
 /// Payload for the [`emit_maintenance_mode_changed`] event.
 ///
 /// Emitted when maintenance mode is toggled by the admin.
-/// When enabled, `lock_funds` returns `FundsPaused` (as if `lock_paused`
-/// were true).
+/// When enabled, all critical operations return `FundsPaused` 
+/// (superseding granular pause flags).
 ///
 /// ### Topics
 /// | Index | Value |
@@ -788,6 +788,7 @@ pub fn emit_deprecation_state_changed(env: &Env, event: DeprecationStateChanged)
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaintenanceModeChanged {
     pub enabled: bool,
+    pub reason: Option<soroban_sdk::String>,
     pub admin: Address,
     pub timestamp: u64,
 }
@@ -795,6 +796,22 @@ pub struct MaintenanceModeChanged {
 /// Emit [`MaintenanceModeChanged`]
 pub fn emit_maintenance_mode_changed(env: &Env, event: MaintenanceModeChanged) {
     let topics = (symbol_short!("maint"),);
+    env.events().publish(topics, event);
+}
+
+/// V2 payload for maintenance mode changes (deterministic + audit-friendly).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaintenanceModeChangedV2 {
+    pub version: u32,
+    pub previous_enabled: bool,
+    pub enabled: bool,
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
+pub fn emit_maintenance_mode_changed_v2(env: &Env, event: MaintenanceModeChangedV2) {
+    let topics = (symbol_short!("maint"), symbol_short!("v2"));
     env.events().publish(topics, event);
 }
 
@@ -822,6 +839,32 @@ pub struct ParticipantFilterModeChanged {
 /// Emit [`ParticipantFilterModeChanged`]
 pub fn emit_participant_filter_mode_changed(env: &Env, event: ParticipantFilterModeChanged) {
     let topics = (symbol_short!("pf_mode"),);
+    env.events().publish(topics, event);
+}
+
+/// Which participant list was mutated.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ParticipantFilterListType {
+    Allowlist,
+    Blocklist,
+}
+
+/// Payload for participant list entry mutation events.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantFilterEntryUpdated {
+    pub version: u32,
+    pub list_type: ParticipantFilterListType,
+    pub address: Address,
+    pub enabled: bool,
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
+/// Emit [`ParticipantFilterEntryUpdated`]
+pub fn emit_participant_filter_entry_updated(env: &Env, event: ParticipantFilterEntryUpdated) {
+    let topics = (symbol_short!("pf_entry"),);
     env.events().publish(topics, event);
 }
 
@@ -1407,5 +1450,151 @@ pub struct RecurringLockCancelled {
 /// Emit [`RecurringLockCancelled`].
 pub fn emit_recurring_lock_cancelled(env: &Env, event: RecurringLockCancelled) {
     let topics = (symbol_short!("rl_cncl"), event.recurring_id);
+    env.events().publish(topics, event);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN ROTATION EVENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTimelockConfigured {
+    pub version: u32,
+    pub admin: Address,
+    pub duration: u64,
+    pub timestamp: u64,
+}
+
+pub fn emit_admin_timelock_configured(env: &Env, event: AdminTimelockConfigured) {
+    let topics = (symbol_short!("adm_tlck"),);
+    env.events().publish(topics, event);
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTransferProposed {
+    pub version: u32,
+    pub old_admin: Address,
+    pub new_admin: Address,
+    pub available_at: u64,
+    pub timestamp: u64,
+}
+
+pub fn emit_admin_transfer_proposed(env: &Env, event: AdminTransferProposed) {
+    let topics = (symbol_short!("adm_prop"),);
+    env.events().publish(topics, event);
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTransferCancelled {
+    pub version: u32,
+    pub old_admin: Address,
+    pub proposed_admin: Address,
+    pub timestamp: u64,
+}
+
+pub fn emit_admin_transfer_cancelled(env: &Env, event: AdminTransferCancelled) {
+    let topics = (symbol_short!("adm_cncl"),);
+    env.events().publish(topics, event);
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTransferAccepted {
+    pub version: u32,
+    pub old_admin: Address,
+    pub new_admin: Address,
+    pub timestamp: u64,
+}
+
+pub fn emit_admin_transfer_accepted(env: &Env, event: AdminTransferAccepted) {
+    let topics = (symbol_short!("adm_acc"),);
+    env.events().publish(topics, event);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BATCH SIZE GOVERNANCE EVENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaxBatchSizeUpdated {
+    pub version: u32,
+    pub admin: Address,
+    pub old_size: u32,
+    pub new_size: u32,
+    pub timestamp: u64,
+}
+
+pub fn emit_max_batch_size_updated(env: &Env, event: MaxBatchSizeUpdated) {
+    let topics = (symbol_short!("b_cap_up"),);
+    env.events().publish(topics, event);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REENTRANCY GUARD EVENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReentrancyAttemptBlocked {
+    pub version: u32,
+    pub timestamp: u64,
+}
+
+pub fn emit_reentrancy_attempt_blocked(env: &Env, event: ReentrancyAttemptBlocked) {
+    let topics = (symbol_short!("r_guard"),);
+    env.events().publish(topics, event);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HIGH-VALUE TIMELOCK EVENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HighValueConfigUpdated {
+    pub version: u32,
+    pub admin: Address,
+    pub threshold: i128,
+    pub duration: u64,
+    pub timestamp: u64,
+}
+
+pub fn emit_high_value_config_updated(env: &Env, event: HighValueConfigUpdated) {
+    let topics = (symbol_short!("hv_cfg"),);
+    env.events().publish(topics, event);
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseQueued {
+    pub version: u32,
+    pub bounty_id: u64,
+    pub contributor: Address,
+    pub amount: i128,
+    pub executable_at: u64,
+    pub timestamp: u64,
+}
+
+pub fn emit_release_queued(env: &Env, event: ReleaseQueued) {
+    let topics = (symbol_short!("hv_q"), event.bounty_id);
+    env.events().publish(topics, event);
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueuedReleaseExecuted {
+    pub version: u32,
+    pub bounty_id: u64,
+    pub contributor: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
+pub fn emit_queued_release_executed(env: &Env, event: QueuedReleaseExecuted) {
+    let topics = (symbol_short!("hv_exec"), event.bounty_id);
     env.events().publish(topics, event);
 }
