@@ -35,6 +35,14 @@
           "Added refund approval audit events for approval set/consumption lifecycle",
           "Added upgrade-safe storage marker for refund eligibility schema versioning"
         ]
+      },
+      {
+        "version": "2.2.0",
+        "release_date": "2026-04-22",
+        "changes": [
+          "Hardened maintenance mode with explicit initialization, idempotent toggling, and audit-friendly v2 events",
+          "Added upgrade-safe storage keys for maintenance mode metadata and schema versioning"
+        ]
       }
     ]
   },
@@ -301,9 +309,76 @@
         "authorization": "admin",
         "pausable": true,
         "gas_estimate": "high"
+      },
+      {
+        "name": "accept_admin",
+        "description": "Accept a pending admin role after timelock expires",
+        "parameters": [],
+        "returns": { "type": "()", "description": "Empty on success" },
+        "authorization": "signer",
+        "pausable": false,
+        "gas_estimate": "low"
       }
     ],
     "view": [
+      {
+        "name": "get_filter_mode",
+        "description": "Get current participant filter mode",
+        "parameters": [],
+        "returns": {
+          "type": "ParticipantFilterMode",
+          "description": "Current participant filter mode"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "query_whitelist",
+        "description": "Get paginated allowlist participants",
+        "parameters": [
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Zero-based start index"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Maximum number of results"
+          }
+        ],
+        "returns": {
+          "type": "Vec<Address>",
+          "description": "Allowlisted participant addresses"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "query_blocklist",
+        "description": "Get paginated blocklist participants",
+        "parameters": [
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Zero-based start index"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Maximum number of results"
+          }
+        ],
+        "returns": {
+          "type": "Vec<Address>",
+          "description": "Blocklisted participant addresses"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
       {
         "name": "get_escrow",
         "description": "Get escrow details by bounty ID",
@@ -493,23 +568,31 @@
         "gas_estimate": "low"
       },
       {
-        "name": "get_claim_window",
-        "description": "View configured claim window for a bounty",
+        "name": "get_risk_flags",
+        "description": "Get current risk flags for a bounty",
         "parameters": [
-          { "name": "bounty_id", "type": "u64", "description": "Bounty identifier" }
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          }
         ],
-        "returns": { "type": "Option<ClaimWindow>", "description": "Start and end times if configured" },
+        "returns": {
+          "type": "u32",
+          "description": "Current risk flags bitmask"
+        },
         "authorization": "any",
         "pausable": false,
         "gas_estimate": "low"
       },
       {
-        "name": "validate_claim_window",
-        "description": "Check if current ledger time is within the valid claim window",
-        "parameters": [
-          { "name": "bounty_id", "type": "u64", "description": "Bounty identifier" }
-        ],
-        "returns": { "type": "Result<(), Error>", "description": "Success if valid, error if outside bounds" },
+        "name": "is_maintenance_mode",
+        "description": "Check if contract is in maintenance mode",
+        "parameters": [],
+        "returns": {
+          "type": "bool",
+          "description": "True if maintenance mode is active"
+        },
         "authorization": "any",
         "pausable": false,
         "gas_estimate": "low"
@@ -706,14 +789,48 @@
         "gas_estimate": "high"
       },
       {
-        "name": "set_claim_window",
-        "description": "Configure strict start and end times for bounty claims",
+        "name": "update_risk_flags",
+        "description": "Updates the risk flags for a specific bounty",
         "parameters": [
-          { "name": "bounty_id", "type": "u64", "description": "Bounty identifier" },
-          { "name": "start_time", "type": "u64", "description": "Timestamp when claiming begins" },
-          { "name": "end_time", "type": "u64", "description": "Timestamp when claiming expires" }
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          },
+          {
+            "name": "new_flags",
+            "type": "u32",
+            "description": "New bitmask of risk flags"
+          }
         ],
-        "returns": { "type": "()", "description": "Empty on success" },
+        "returns": {
+          "type": "()",
+          "description": "Empty on success"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "set_maintenance_mode",
+        "description": "Toggle global maintenance mode",
+        "parameters": [
+          {
+            "name": "enabled",
+            "type": "bool",
+            "description": "Enable or disable maintenance mode"
+          },
+          {
+            "name": "reason",
+            "type": "Option<String>",
+            "description": "Reason for maintenance mode toggle",
+            "optional": true
+          }
+        ],
+        "returns": {
+          "type": "()",
+          "description": "Empty on success"
+        },
         "authorization": "admin",
         "pausable": false,
         "gas_estimate": "low"
@@ -826,10 +943,46 @@
         "data_structure": "u32"
       },
       {
+        "name": "MaintenanceMode",
+        "type": "instance",
+        "description": "Maintenance mode flag (explicitly initialized)",
+        "data_structure": "bool"
+      },
+      {
+        "name": "MaintenanceModeUpdatedAt",
+        "type": "instance",
+        "description": "Timestamp when maintenance mode last changed",
+        "data_structure": "u64"
+      },
+      {
+        "name": "MaintenanceModeUpdatedBy",
+        "type": "instance",
+        "description": "Admin address that last changed maintenance mode",
+        "data_structure": "Address"
+      },
+      {
+        "name": "MaintenanceModeSchemaVersion",
+        "type": "instance",
+        "description": "Version marker for maintenance mode semantics",
+        "data_structure": "u32"
+      },
+      {
         "name": "ReentrancyGuard",
         "type": "temporary",
         "description": "Reentrancy protection flag",
         "data_structure": "bool"
+      },
+      {
+        "name": "WhitelistIndex",
+        "type": "instance",
+        "description": "Paginated index of allowlisted addresses",
+        "data_structure": "Vec<Address>"
+      },
+      {
+        "name": "BlocklistIndex",
+        "type": "instance",
+        "description": "Paginated index of blocklisted addresses",
+        "data_structure": "Vec<Address>"
       }
     ]
   },
@@ -844,7 +997,8 @@
       "Input validation for all parameters",
       "Overflow protection in arithmetic operations",
       "Event emission for audit trail",
-      "Deterministic refund eligibility view semantics"
+      "Deterministic refund eligibility view semantics",
+      "Deterministic maintenance mode semantics with audit events"
     ],
     "access_control": [
       {
@@ -1101,6 +1255,33 @@
           }
         ],
         "trigger": "Successful refund call with admin approval record"
+      },
+      {
+        "name": "MaintenanceModeChangedV2",
+        "description": "Maintenance mode toggled with previous state (audit-friendly)",
+        "data": [
+          {
+            "name": "previous_enabled",
+            "type": "bool",
+            "description": "Previous maintenance mode state"
+          },
+          {
+            "name": "enabled",
+            "type": "bool",
+            "description": "New maintenance mode state"
+          },
+          {
+            "name": "admin",
+            "type": "Address",
+            "description": "Admin who toggled maintenance mode"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64",
+            "description": "Ledger timestamp"
+          }
+        ],
+        "trigger": "Admin toggles maintenance mode (state change only)"
       }
     ]
   },
