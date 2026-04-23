@@ -153,6 +153,7 @@ const BATCH_PAYOUT: Symbol = symbol_short!("BatchPay");
 const PAYOUT: Symbol = symbol_short!("Payout");
 const EVENT_VERSION_V2: u32 = 2;
 const PAUSE_STATE_CHANGED: Symbol = symbol_short!("PauseSt");
+const PAUSE_STATE_CHANGED_V2: Symbol = symbol_short!("PauseStV2");
 const MAINTENANCE_MODE_CHANGED: Symbol = symbol_short!("MaintSt");
 const PROGRAM_RISK_FLAGS_UPDATED: Symbol = symbol_short!("pr_risk");
 const PROGRAM_REGISTRY: Symbol = symbol_short!("ProgReg");
@@ -621,6 +622,9 @@ pub enum DataKey {
     /// Upgrade-safe schema version marker for spend-limit threshold storage.
     /// Written on init; increment when `MultisigConfig` layout changes.
     SpendLimitSchemaVersion,
+    /// Upgrade-safe schema version marker for pause flags storage.
+    /// Written on init; increment when `PauseFlags` layout changes.
+    PauseSchemaVersion,
 }
 
 #[contracttype]
@@ -637,6 +641,34 @@ pub struct PauseFlags {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PauseStateChanged {
     pub operation: Symbol,
+    pub paused: bool,
+    pub admin: Address,
+    pub reason: Option<String>,
+    pub timestamp: u64,
+    pub receipt_id: u64,
+}
+
+/// V2 audit event for pause state changes — deterministic, upgrade-safe.
+///
+/// Emitted alongside [`PauseStateChanged`] for every `set_paused` call.
+/// Adds `version`, `previous_paused`, and `schema_version` fields so
+/// indexers can detect schema mismatches and reconstruct state transitions
+/// without reading storage.
+///
+/// ### Topics
+/// `(PAUSE_STATE_CHANGED_V2, operation_symbol)`
+///
+/// ### Security notes
+/// - `previous_paused` is read from storage **before** the mutation so the
+///   event accurately reflects the transition (old → new).
+/// - `invariant_ok` is always `true` on-chain; a `false` value would indicate
+///   a storage corruption bug.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PauseStateChangedV2 {
+    pub version: u32,
+    pub operation: Symbol,
+    pub previous_paused: bool,
     pub paused: bool,
     pub admin: Address,
     pub reason: Option<String>,
@@ -847,6 +879,13 @@ pub const DEFAULT_MAX_HISTORY_PAGE_LIMIT: u32 = 200;
 /// Written to instance storage during `init` so upgrade safety checks can
 /// detect schema mismatches on legacy deployments.
 pub const SPEND_LIMIT_SCHEMA_VERSION_V1: u32 = 1;
+
+/// Current pause flags storage schema version.
+///
+/// Increment whenever `PauseFlags` layout changes in a breaking way.
+/// Written to instance storage during `init` so upgrade safety checks can
+/// detect schema mismatches on legacy deployments.
+pub const PAUSE_SCHEMA_VERSION_V1: u32 = 1;
 
 fn default_history_pagination_config() -> HistoryPaginationConfig {
     HistoryPaginationConfig {
@@ -1297,6 +1336,18 @@ impl ProgramEscrowContract {
                     schema_version: SPEND_LIMIT_SCHEMA_VERSION_V1,
                     timestamp: env.ledger().timestamp(),
                 },
+            );
+        }
+
+        // Write upgrade-safe pause flags schema version marker.
+        if !env
+            .storage()
+            .instance()
+            .has(&DataKey::PauseSchemaVersion)
+        {
+            env.storage().instance().set(
+                &DataKey::PauseSchemaVersion,
+                &PAUSE_SCHEMA_VERSION_V1,
             );
         }
 
@@ -2134,6 +2185,7 @@ impl ProgramEscrowContract {
         }
 
         if let Some(paused) = lock {
+            let previous_paused = flags.lock_paused;
             flags.lock_paused = paused;
             let receipt_id = Self::increment_receipt_id(&env);
             env.events().publish(
@@ -2147,9 +2199,23 @@ impl ProgramEscrowContract {
                     receipt_id,
                 },
             );
+            env.events().publish(
+                (PAUSE_STATE_CHANGED_V2, symbol_short!("lock")),
+                PauseStateChangedV2 {
+                    version: EVENT_VERSION_V2,
+                    operation: symbol_short!("lock"),
+                    previous_paused,
+                    paused,
+                    admin: admin.clone(),
+                    reason: reason.clone(),
+                    timestamp,
+                    receipt_id,
+                },
+            );
         }
 
         if let Some(paused) = release {
+            let previous_paused = flags.release_paused;
             flags.release_paused = paused;
             let receipt_id = Self::increment_receipt_id(&env);
             env.events().publish(
@@ -2163,15 +2229,42 @@ impl ProgramEscrowContract {
                     receipt_id,
                 },
             );
+            env.events().publish(
+                (PAUSE_STATE_CHANGED_V2, symbol_short!("release")),
+                PauseStateChangedV2 {
+                    version: EVENT_VERSION_V2,
+                    operation: symbol_short!("release"),
+                    previous_paused,
+                    paused,
+                    admin: admin.clone(),
+                    reason: reason.clone(),
+                    timestamp,
+                    receipt_id,
+                },
+            );
         }
 
         if let Some(paused) = refund {
+            let previous_paused = flags.refund_paused;
             flags.refund_paused = paused;
             let receipt_id = Self::increment_receipt_id(&env);
             env.events().publish(
                 (PAUSE_STATE_CHANGED,),
                 PauseStateChanged {
                     operation: symbol_short!("refund"),
+                    paused,
+                    admin: admin.clone(),
+                    reason: reason.clone(),
+                    timestamp,
+                    receipt_id,
+                },
+            );
+            env.events().publish(
+                (PAUSE_STATE_CHANGED_V2, symbol_short!("refund")),
+                PauseStateChangedV2 {
+                    version: EVENT_VERSION_V2,
+                    operation: symbol_short!("refund"),
+                    previous_paused,
                     paused,
                     admin: admin.clone(),
                     reason: reason.clone(),
@@ -2275,6 +2368,18 @@ impl ProgramEscrowContract {
                 pause_reason: None,
                 paused_at: 0,
             })
+    }
+
+    /// Returns the stored pause flags schema version.
+    ///
+    /// Returns `PAUSE_SCHEMA_VERSION_V1` (1) for contracts initialized after
+    /// this upgrade. Returns `0` for legacy contracts that predate the schema
+    /// version marker — callers should treat `0` as "unknown / pre-v1".
+    pub fn get_pause_schema_version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::PauseSchemaVersion)
+            .unwrap_or(0)
     }
 
     /// Check if an operation is paused

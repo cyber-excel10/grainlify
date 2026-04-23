@@ -2754,3 +2754,288 @@ fn test_spend_limit_negative_threshold_rejected() {
     let program_id = client.get_program_info().program_id;
     client.set_program_spend_threshold(&program_id, &-1);
 }
+
+// ============================================================================
+// PAUSE MODE BLOCKS PAYOUTS — Issue #1060
+// ============================================================================
+// Tests for deterministic pause behavior, PauseStateChangedV2 events,
+// upgrade-safe storage (PauseSchemaVersion), and edge cases.
+
+/// PM-01: Pause schema version is written at init and readable.
+#[test]
+fn test_pause_schema_version_written_at_init() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 0);
+
+    let schema_version = client.get_pause_schema_version();
+    assert_eq!(
+        schema_version, PAUSE_SCHEMA_VERSION_V1,
+        "Pause schema version must be PAUSE_SCHEMA_VERSION_V1 after init"
+    );
+}
+
+/// PM-02: Default pause flags are all false after init.
+#[test]
+fn test_pause_flags_default_all_false() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 0);
+
+    let flags = client.get_pause_flags();
+    assert!(!flags.lock_paused, "lock_paused must default to false");
+    assert!(!flags.release_paused, "release_paused must default to false");
+    assert!(!flags.refund_paused, "refund_paused must default to false");
+}
+
+/// PM-03: release_paused blocks single_payout with deterministic "Funds Paused" panic.
+#[test]
+#[should_panic(expected = "Funds Paused")]
+fn test_release_paused_blocks_single_payout() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 1_000);
+
+    client.set_paused(&None, &Some(true), &None, &None);
+
+    let recipient = Address::generate(&env);
+    client.single_payout(&recipient, &100);
+}
+
+/// PM-04: release_paused blocks batch_payout with deterministic "Funds Paused" panic.
+#[test]
+#[should_panic(expected = "Funds Paused")]
+fn test_release_paused_blocks_batch_payout() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 1_000);
+
+    client.set_paused(&None, &Some(true), &None, &None);
+
+    let r1 = Address::generate(&env);
+    client.batch_payout(
+        &soroban_sdk::vec![&env, r1],
+        &soroban_sdk::vec![&env, 100i128],
+    );
+}
+
+/// PM-05: lock_paused blocks lock_program_funds with deterministic "Funds Paused" panic.
+#[test]
+#[should_panic(expected = "Funds Paused")]
+fn test_lock_paused_blocks_lock_program_funds() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 0);
+
+    client.set_paused(&Some(true), &None, &None, &None);
+    client.lock_program_funds(&500);
+}
+
+/// PM-06: lock_paused does NOT block single_payout (orthogonal flags).
+#[test]
+fn test_lock_paused_does_not_block_single_payout() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 1_000);
+
+    client.set_paused(&Some(true), &None, &None, &None);
+
+    let recipient = Address::generate(&env);
+    let data = client.single_payout(&recipient, &200);
+    assert_eq!(data.remaining_balance, 800);
+}
+
+/// PM-07: release_paused does NOT block lock_program_funds (orthogonal flags).
+#[test]
+fn test_release_paused_does_not_block_lock() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 0);
+
+    client.set_paused(&None, &Some(true), &None, &None);
+
+    let data = client.lock_program_funds(&300);
+    assert_eq!(data.remaining_balance, 300);
+}
+
+/// PM-08: Unpause restores single_payout after release_paused.
+#[test]
+fn test_unpause_restores_single_payout() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 1_000);
+
+    client.set_paused(&None, &Some(true), &None, &None);
+    assert!(client.try_single_payout(&Address::generate(&env), &100).is_err());
+
+    client.set_paused(&None, &Some(false), &None, &None);
+    let data = client.single_payout(&Address::generate(&env), &100);
+    assert_eq!(data.remaining_balance, 900);
+}
+
+/// PM-09: Unpause restores batch_payout after release_paused.
+#[test]
+fn test_unpause_restores_batch_payout() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 1_000);
+
+    client.set_paused(&None, &Some(true), &None, &None);
+    let r1 = Address::generate(&env);
+    assert!(client
+        .try_batch_payout(&soroban_sdk::vec![&env, r1.clone()], &soroban_sdk::vec![&env, 100i128])
+        .is_err());
+
+    client.set_paused(&None, &Some(false), &None, &None);
+    let data = client.batch_payout(
+        &soroban_sdk::vec![&env, r1],
+        &soroban_sdk::vec![&env, 100i128],
+    );
+    assert_eq!(data.remaining_balance, 900);
+}
+
+/// PM-10: PauseStateChangedV2 event is emitted with correct fields on pause.
+#[test]
+fn test_pause_state_changed_v2_event_on_pause() {
+    let env = Env::default();
+    let (client, admin, _token, _token_admin) = setup_program(&env, 0);
+
+    env.ledger().with_mut(|li| li.timestamp = 99_999);
+
+    client.set_paused(&None, &Some(true), &None, &None);
+
+    // Find the PauseStateChangedV2 event
+    let events = env.events().all();
+    let v2_event = events.iter().find(|e| {
+        let topics = e.1.clone();
+        if let Some(t0) = topics.get(0) {
+            let sym: Symbol = t0.into_val(&env);
+            sym == Symbol::new(&env, "PauseStV2")
+        } else {
+            false
+        }
+    });
+
+    assert!(v2_event.is_some(), "PauseStateChangedV2 event must be emitted");
+
+    let event = v2_event.unwrap();
+    let data: PauseStateChangedV2 = event.2.try_into_val(&env).unwrap();
+
+    assert_eq!(data.version, EVENT_VERSION_V2);
+    assert_eq!(data.operation, symbol_short!("release"));
+    assert_eq!(data.previous_paused, false, "previous_paused must be false before first pause");
+    assert_eq!(data.paused, true);
+    assert_eq!(data.admin, admin);
+    assert_eq!(data.timestamp, 99_999);
+    assert!(data.receipt_id > 0);
+}
+
+/// PM-11: PauseStateChangedV2 captures previous_paused = true when unpausing.
+#[test]
+fn test_pause_state_changed_v2_previous_paused_on_unpause() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 0);
+
+    // First pause
+    client.set_paused(&None, &Some(true), &None, &None);
+
+    // Then unpause — previous_paused should be true
+    client.set_paused(&None, &Some(false), &None, &None);
+
+    let events = env.events().all();
+    // Get the last PauseStateChangedV2 event (the unpause one)
+    let v2_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            let topics = e.1.clone();
+            if let Some(t0) = topics.get(0) {
+                let sym: Symbol = t0.into_val(&env);
+                sym == Symbol::new(&env, "PauseStV2")
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    assert!(v2_events.len() >= 2, "Should have at least 2 PauseStateChangedV2 events");
+
+    let unpause_event = v2_events.last().unwrap();
+    let data: PauseStateChangedV2 = unpause_event.2.try_into_val(&env).unwrap();
+
+    assert_eq!(data.previous_paused, true, "previous_paused must be true when unpausing");
+    assert_eq!(data.paused, false);
+}
+
+/// PM-12: All three flags can be paused simultaneously; all three block their ops.
+#[test]
+fn test_all_flags_paused_blocks_all_operations() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 1_000);
+
+    client.set_paused(&Some(true), &Some(true), &Some(true), &None);
+
+    assert!(client.try_lock_program_funds(&100).is_err(), "lock must be blocked");
+    assert!(
+        client.try_single_payout(&Address::generate(&env), &100).is_err(),
+        "single_payout must be blocked"
+    );
+    assert!(
+        client
+            .try_batch_payout(
+                &soroban_sdk::vec![&env, Address::generate(&env)],
+                &soroban_sdk::vec![&env, 100i128]
+            )
+            .is_err(),
+        "batch_payout must be blocked"
+    );
+}
+
+/// PM-13: Partial unpause — only release unpaused, lock stays paused.
+#[test]
+fn test_partial_unpause_preserves_other_flags() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 1_000);
+
+    client.set_paused(&Some(true), &Some(true), &Some(true), &None);
+
+    // Only unpause release
+    client.set_paused(&None, &Some(false), &None, &None);
+
+    let flags = client.get_pause_flags();
+    assert!(flags.lock_paused, "lock_paused must remain true");
+    assert!(!flags.release_paused, "release_paused must be false after unpause");
+    assert!(flags.refund_paused, "refund_paused must remain true");
+}
+
+/// PM-14: Read-only queries (get_program_info, get_remaining_balance) are unaffected by pause.
+#[test]
+fn test_read_only_queries_unaffected_by_pause() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 500);
+
+    client.set_paused(&Some(true), &Some(true), &Some(true), &None);
+
+    let info = client.get_program_info();
+    assert_eq!(info.remaining_balance, 500);
+
+    let balance = client.get_remaining_balance();
+    assert_eq!(balance, 500);
+}
+
+/// PM-15: Pause reason is stored and retrievable via get_pause_flags.
+#[test]
+fn test_pause_reason_stored_in_flags() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 0);
+
+    let reason = String::from_str(&env, "Security incident");
+    client.set_paused(&Some(true), &None, &None, &Some(reason.clone()));
+
+    let flags = client.get_pause_flags();
+    assert_eq!(flags.pause_reason, Some(reason));
+}
+
+/// PM-16: Pause reason is cleared when all flags are unpaused.
+#[test]
+fn test_pause_reason_cleared_on_full_unpause() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 0);
+
+    let reason = String::from_str(&env, "Temporary halt");
+    client.set_paused(&Some(true), &None, &None, &Some(reason));
+    client.set_paused(&Some(false), &None, &None, &None);
+
+    let flags = client.get_pause_flags();
+    assert_eq!(flags.pause_reason, None, "reason must be cleared when fully unpaused");
+}

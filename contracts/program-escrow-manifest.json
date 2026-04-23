@@ -3,7 +3,7 @@
   "contract_name": "ProgramEscrowContract",
   "contract_purpose": "Handles hackathon and program prize pools with batch payouts, dependency management, circuit breaker protection, and comprehensive monitoring",
   "version": {
-    "current": "2.3.0",
+    "current": "2.4.0",
     "schema": "1.0.0",
     "history": [
       {
@@ -57,7 +57,22 @@
           "Added SpendLimitSchemaVersionSet audit event emitted on init for upgrade-safe schema tracking",
           "Added SpendLimitSchemaVersion upgrade-safe storage key to instance storage",
           "Added get_spend_limit_schema_version view entrypoint",
-          "Added ContractError::SpendLimitExceeded (code 904) to canonical error enum",
+          "Added ContractError::SpendLimitExceeded (code 904) to canonical error enum"
+        ]
+      },
+      {
+        "version": "2.4.0",
+        "release_date": "2026-04-23",
+        "changes": [
+          "Added PauseStateChangedV2 audit event with version, previous_paused, and receipt_id fields for deterministic state-transition tracking",
+          "PauseStateChangedV2 is emitted alongside PauseStateChanged on every set_paused call for backward compatibility",
+          "Added PauseSchemaVersion DataKey — upgrade-safe storage marker written at init",
+          "Added PAUSE_SCHEMA_VERSION_V1 constant (value: 1)",
+          "Added get_pause_schema_version() view entrypoint — returns 0 for legacy pre-v1 contracts",
+          "Pause checks remain deterministic: release_paused blocks single_payout and batch_payout; lock_paused blocks lock_program_funds; flags are orthogonal",
+          "Added 16 targeted tests in test.rs covering pause invariants, V2 event fields, schema version, and edge cases"
+        ]
+      }
           "Deterministic error ordering preserved: threshold check runs before balance and circuit-breaker checks"
         ]
       }
