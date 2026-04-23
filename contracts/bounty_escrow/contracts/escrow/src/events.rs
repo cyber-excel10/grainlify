@@ -777,8 +777,8 @@ pub fn emit_deprecation_state_changed(env: &Env, event: DeprecationStateChanged)
 /// Payload for the [`emit_maintenance_mode_changed`] event.
 ///
 /// Emitted when maintenance mode is toggled by the admin.
-/// When enabled, `lock_funds` returns `FundsPaused` (as if `lock_paused`
-/// were true).
+/// When enabled, all critical operations return `FundsPaused` 
+/// (superseding granular pause flags).
 ///
 /// ### Topics
 /// | Index | Value |
@@ -788,6 +788,7 @@ pub fn emit_deprecation_state_changed(env: &Env, event: DeprecationStateChanged)
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaintenanceModeChanged {
     pub enabled: bool,
+    pub reason: Option<soroban_sdk::String>,
     pub admin: Address,
     pub timestamp: u64,
 }
@@ -795,6 +796,22 @@ pub struct MaintenanceModeChanged {
 /// Emit [`MaintenanceModeChanged`]
 pub fn emit_maintenance_mode_changed(env: &Env, event: MaintenanceModeChanged) {
     let topics = (symbol_short!("maint"),);
+    env.events().publish(topics, event);
+}
+
+/// V2 payload for maintenance mode changes (deterministic + audit-friendly).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaintenanceModeChangedV2 {
+    pub version: u32,
+    pub previous_enabled: bool,
+    pub enabled: bool,
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
+pub fn emit_maintenance_mode_changed_v2(env: &Env, event: MaintenanceModeChangedV2) {
+    let topics = (symbol_short!("maint"), symbol_short!("v2"));
     env.events().publish(topics, event);
 }
 
@@ -822,6 +839,32 @@ pub struct ParticipantFilterModeChanged {
 /// Emit [`ParticipantFilterModeChanged`]
 pub fn emit_participant_filter_mode_changed(env: &Env, event: ParticipantFilterModeChanged) {
     let topics = (symbol_short!("pf_mode"),);
+    env.events().publish(topics, event);
+}
+
+/// Which participant list was mutated.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ParticipantFilterListType {
+    Allowlist,
+    Blocklist,
+}
+
+/// Payload for participant list entry mutation events.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantFilterEntryUpdated {
+    pub version: u32,
+    pub list_type: ParticipantFilterListType,
+    pub address: Address,
+    pub enabled: bool,
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
+/// Emit [`ParticipantFilterEntryUpdated`]
+pub fn emit_participant_filter_entry_updated(env: &Env, event: ParticipantFilterEntryUpdated) {
+    let topics = (symbol_short!("pf_entry"),);
     env.events().publish(topics, event);
 }
 
@@ -1411,90 +1454,147 @@ pub fn emit_recurring_lock_cancelled(env: &Env, event: RecurringLockCancelled) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FEE ROUTING INVARIANT EVENTS
+// ADMIN ROTATION EVENTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Payload for the [`emit_fee_routing_invariant_checked`] event.
-///
-/// Emitted after every fee routing operation to provide an on-chain audit
-/// trail that the `fee + net == gross` invariant was verified.
-///
-/// ### Topics
-/// | Index | Value |
-/// |-------|-------|
-/// | 0 | `"fr_inv"` |
-/// | 1 | `bounty_id: u64` |
-///
-/// ### Security notes
-/// - This event is emitted **after** all token transfers complete, so it
-///   accurately reflects the final settled state.
-/// - `distributed_total` must equal `fee_amount` for the invariant to hold.
-///   Any discrepancy indicates a rounding or overflow bug.
-/// - `weight_total` is published so auditors can verify proportional splits
-///   without re-reading storage.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FeeRoutingInvariantChecked {
+pub struct AdminTimelockConfigured {
     pub version: u32,
-    /// Bounty this fee was collected for.
-    pub bounty_id: u64,
-    /// Whether this was a lock or release fee.
-    pub operation_type: FeeOperationType,
-    /// Gross amount before fee deduction.
-    pub gross_amount: i128,
-    /// Total fee amount that was routed.
-    pub fee_amount: i128,
-    /// Sum of all individual shares actually distributed (must equal `fee_amount`).
-    pub distributed_total: i128,
-    /// Sum of all destination weights used for proportional split.
-    pub weight_total: u64,
-    /// Number of destinations the fee was split across.
-    pub destination_count: u32,
-    /// Whether the invariant `distributed_total == fee_amount` held.
-    pub invariant_ok: bool,
-    /// Ledger timestamp.
+    pub admin: Address,
+    pub duration: u64,
     pub timestamp: u64,
 }
 
-/// Emit [`FeeRoutingInvariantChecked`].
-///
-/// # Arguments
-/// * `env`   — Soroban execution environment.
-/// * `event` — Pre-constructed event payload.
-pub fn emit_fee_routing_invariant_checked(env: &Env, event: FeeRoutingInvariantChecked) {
-    let topics = (symbol_short!("fr_inv"), event.bounty_id);
+pub fn emit_admin_timelock_configured(env: &Env, event: AdminTimelockConfigured) {
+    let topics = (symbol_short!("adm_tlck"),);
     env.events().publish(topics, event);
 }
 
-/// Payload for the [`emit_fee_routing_schema_version`] event.
-///
-/// Emitted once during contract initialization (or upgrade) to record the
-/// current fee routing storage schema version. Indexers can use this to
-/// detect schema migrations without scanning all storage keys.
-///
-/// ### Topics
-/// | Index | Value |
-/// |-------|-------|
-/// | 0 | `"fr_schema"` |
-///
-/// ### Security notes
-/// - This is an upgrade-safety marker. The version is stored in instance
-///   storage under [`crate::DataKey::FeeRoutingSchemaVersion`] and is
-///   checked during upgrade simulation.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FeeRoutingSchemaVersionSet {
+pub struct AdminTransferProposed {
     pub version: u32,
-    /// The fee routing schema version being recorded.
-    pub schema_version: u32,
-    /// Admin that triggered the version write (init or upgrade).
-    pub set_by: Address,
-    /// Ledger timestamp.
+    pub old_admin: Address,
+    pub new_admin: Address,
+    pub available_at: u64,
     pub timestamp: u64,
 }
 
-/// Emit [`FeeRoutingSchemaVersionSet`].
-pub fn emit_fee_routing_schema_version_set(env: &Env, event: FeeRoutingSchemaVersionSet) {
-    let topics = (symbol_short!("fr_schma"),);
+pub fn emit_admin_transfer_proposed(env: &Env, event: AdminTransferProposed) {
+    let topics = (symbol_short!("adm_prop"),);
+    env.events().publish(topics, event);
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTransferCancelled {
+    pub version: u32,
+    pub old_admin: Address,
+    pub proposed_admin: Address,
+    pub timestamp: u64,
+}
+
+pub fn emit_admin_transfer_cancelled(env: &Env, event: AdminTransferCancelled) {
+    let topics = (symbol_short!("adm_cncl"),);
+    env.events().publish(topics, event);
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTransferAccepted {
+    pub version: u32,
+    pub old_admin: Address,
+    pub new_admin: Address,
+    pub timestamp: u64,
+}
+
+pub fn emit_admin_transfer_accepted(env: &Env, event: AdminTransferAccepted) {
+    let topics = (symbol_short!("adm_acc"),);
+    env.events().publish(topics, event);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BATCH SIZE GOVERNANCE EVENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaxBatchSizeUpdated {
+    pub version: u32,
+    pub admin: Address,
+    pub old_size: u32,
+    pub new_size: u32,
+    pub timestamp: u64,
+}
+
+pub fn emit_max_batch_size_updated(env: &Env, event: MaxBatchSizeUpdated) {
+    let topics = (symbol_short!("b_cap_up"),);
+    env.events().publish(topics, event);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REENTRANCY GUARD EVENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReentrancyAttemptBlocked {
+    pub version: u32,
+    pub timestamp: u64,
+}
+
+pub fn emit_reentrancy_attempt_blocked(env: &Env, event: ReentrancyAttemptBlocked) {
+    let topics = (symbol_short!("r_guard"),);
+    env.events().publish(topics, event);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HIGH-VALUE TIMELOCK EVENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HighValueConfigUpdated {
+    pub version: u32,
+    pub admin: Address,
+    pub threshold: i128,
+    pub duration: u64,
+    pub timestamp: u64,
+}
+
+pub fn emit_high_value_config_updated(env: &Env, event: HighValueConfigUpdated) {
+    let topics = (symbol_short!("hv_cfg"),);
+    env.events().publish(topics, event);
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseQueued {
+    pub version: u32,
+    pub bounty_id: u64,
+    pub contributor: Address,
+    pub amount: i128,
+    pub executable_at: u64,
+    pub timestamp: u64,
+}
+
+pub fn emit_release_queued(env: &Env, event: ReleaseQueued) {
+    let topics = (symbol_short!("hv_q"), event.bounty_id);
+    env.events().publish(topics, event);
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueuedReleaseExecuted {
+    pub version: u32,
+    pub bounty_id: u64,
+    pub contributor: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
+pub fn emit_queued_release_executed(env: &Env, event: QueuedReleaseExecuted) {
+    let topics = (symbol_short!("hv_exec"), event.bounty_id);
     env.events().publish(topics, event);
 }

@@ -40,12 +40,8 @@
         "version": "2.2.0",
         "release_date": "2026-04-22",
         "changes": [
-          "Added fee routing invariant enforcement: distributed_total == fee_amount is verified after every routing operation",
-          "Added FeeRoutingInvariantChecked audit event emitted after every fee routing call",
-          "Added FeeRoutingSchemaVersionSet audit event emitted on init for upgrade-safe schema tracking",
-          "Added FeeRoutingSchemaVersion upgrade-safe storage key to instance storage",
-          "Upgrade safety check now warns when FeeRoutingSchemaVersion is absent (legacy deployments)",
-          "route_fee now panics on invariant violation rather than silently losing dust"
+          "Hardened maintenance mode with explicit initialization, idempotent toggling, and audit-friendly v2 events",
+          "Added upgrade-safe storage keys for maintenance mode metadata and schema versioning"
         ]
       }
     ]
@@ -313,9 +309,76 @@
         "authorization": "admin",
         "pausable": true,
         "gas_estimate": "high"
+      },
+      {
+        "name": "accept_admin",
+        "description": "Accept a pending admin role after timelock expires",
+        "parameters": [],
+        "returns": { "type": "()", "description": "Empty on success" },
+        "authorization": "signer",
+        "pausable": false,
+        "gas_estimate": "low"
       }
     ],
     "view": [
+      {
+        "name": "get_filter_mode",
+        "description": "Get current participant filter mode",
+        "parameters": [],
+        "returns": {
+          "type": "ParticipantFilterMode",
+          "description": "Current participant filter mode"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "query_whitelist",
+        "description": "Get paginated allowlist participants",
+        "parameters": [
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Zero-based start index"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Maximum number of results"
+          }
+        ],
+        "returns": {
+          "type": "Vec<Address>",
+          "description": "Allowlisted participant addresses"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "query_blocklist",
+        "description": "Get paginated blocklist participants",
+        "parameters": [
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Zero-based start index"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Maximum number of results"
+          }
+        ],
+        "returns": {
+          "type": "Vec<Address>",
+          "description": "Blocklisted participant addresses"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
       {
         "name": "get_escrow",
         "description": "Get escrow details by bounty ID",
@@ -500,6 +563,63 @@
           "type": "Analytics",
           "description": "Analytics data"
         },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_risk_flags",
+        "description": "Get current risk flags for a bounty",
+        "parameters": [
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          }
+        ],
+        "returns": {
+          "type": "u32",
+          "description": "Current risk flags bitmask"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "is_maintenance_mode",
+        "description": "Check if contract is in maintenance mode",
+        "parameters": [],
+        "returns": {
+          "type": "bool",
+          "description": "True if maintenance mode is active"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "is_reentrancy_guard_locked",
+        "description": "View current state of the upgrade-safe reentrancy guard",
+        "parameters": [],
+        "returns": { "type": "bool", "description": "True if currently locked" },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_high_value_config",
+        "description": "View global high-value release config",
+        "parameters": [],
+        "returns": { "type": "Option<HighValueConfig>" },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_queued_release",
+        "description": "View queued release details for a bounty",
+        "parameters": [{ "name": "bounty_id", "type": "u64" }],
+        "returns": { "type": "Option<QueuedRelease>" },
         "authorization": "any",
         "pausable": false,
         "gas_estimate": "low"
@@ -694,6 +814,65 @@
         "authorization": "admin",
         "pausable": false,
         "gas_estimate": "high"
+      },
+      {
+        "name": "update_risk_flags",
+        "description": "Updates the risk flags for a specific bounty",
+        "parameters": [
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          },
+          {
+            "name": "new_flags",
+            "type": "u32",
+            "description": "New bitmask of risk flags"
+          }
+        ],
+        "returns": {
+          "type": "()",
+          "description": "Empty on success"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "set_maintenance_mode",
+        "description": "Toggle global maintenance mode",
+        "parameters": [
+          {
+            "name": "enabled",
+            "type": "bool",
+            "description": "Enable or disable maintenance mode"
+          },
+          {
+            "name": "reason",
+            "type": "Option<String>",
+            "description": "Reason for maintenance mode toggle",
+            "optional": true
+          }
+        ],
+        "returns": {
+          "type": "()",
+          "description": "Empty on success"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "set_high_value_config",
+        "description": "Configure the threshold and delay for high-value releases",
+        "parameters": [
+          { "name": "threshold", "type": "i128", "description": "Amount triggering the timelock" },
+          { "name": "duration", "type": "u64", "description": "Timelock duration in seconds" }
+        ],
+        "returns": { "type": "()", "description": "Empty on success" },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
       }
     ]
   },
@@ -803,9 +982,27 @@
         "data_structure": "u32"
       },
       {
-        "name": "FeeRoutingSchemaVersion",
+        "name": "MaintenanceMode",
         "type": "instance",
-        "description": "Upgrade-safe version marker for fee routing storage layout. Increment when FeeConfig or TreasuryDestination schema changes.",
+        "description": "Maintenance mode flag (explicitly initialized)",
+        "data_structure": "bool"
+      },
+      {
+        "name": "MaintenanceModeUpdatedAt",
+        "type": "instance",
+        "description": "Timestamp when maintenance mode last changed",
+        "data_structure": "u64"
+      },
+      {
+        "name": "MaintenanceModeUpdatedBy",
+        "type": "instance",
+        "description": "Admin address that last changed maintenance mode",
+        "data_structure": "Address"
+      },
+      {
+        "name": "MaintenanceModeSchemaVersion",
+        "type": "instance",
+        "description": "Version marker for maintenance mode semantics",
         "data_structure": "u32"
       },
       {
@@ -813,6 +1010,18 @@
         "type": "temporary",
         "description": "Reentrancy protection flag",
         "data_structure": "bool"
+      },
+      {
+        "name": "WhitelistIndex",
+        "type": "instance",
+        "description": "Paginated index of allowlisted addresses",
+        "data_structure": "Vec<Address>"
+      },
+      {
+        "name": "BlocklistIndex",
+        "type": "instance",
+        "description": "Paginated index of blocklisted addresses",
+        "data_structure": "Vec<Address>"
       }
     ]
   },
@@ -827,7 +1036,8 @@
       "Input validation for all parameters",
       "Overflow protection in arithmetic operations",
       "Event emission for audit trail",
-      "Deterministic refund eligibility view semantics"
+      "Deterministic refund eligibility view semantics",
+      "Deterministic maintenance mode semantics with audit events"
     ],
     "access_control": [
       {
@@ -1086,72 +1296,23 @@
         "trigger": "Successful refund call with admin approval record"
       },
       {
-        "name": "FeeRoutingInvariantChecked",
-        "description": "Audit event emitted after every fee routing operation confirming distributed_total == fee_amount",
-        "topics": ["fr_inv", "bounty_id"],
+        "name": "MaintenanceModeChangedV2",
+        "description": "Maintenance mode toggled with previous state (audit-friendly)",
         "data": [
           {
-            "name": "bounty_id",
-            "type": "u64",
-            "description": "Bounty the fee was collected for"
-          },
-          {
-            "name": "operation_type",
-            "type": "FeeOperationType",
-            "description": "Lock or Release"
-          },
-          {
-            "name": "gross_amount",
-            "type": "i128",
-            "description": "Gross amount before fee deduction"
-          },
-          {
-            "name": "fee_amount",
-            "type": "i128",
-            "description": "Total fee amount routed"
-          },
-          {
-            "name": "distributed_total",
-            "type": "i128",
-            "description": "Sum of all shares actually distributed; must equal fee_amount"
-          },
-          {
-            "name": "weight_total",
-            "type": "u64",
-            "description": "Sum of all destination weights used for proportional split"
-          },
-          {
-            "name": "destination_count",
-            "type": "u32",
-            "description": "Number of destinations the fee was split across"
-          },
-          {
-            "name": "invariant_ok",
+            "name": "previous_enabled",
             "type": "bool",
-            "description": "Whether distributed_total == fee_amount held"
+            "description": "Previous maintenance mode state"
           },
           {
-            "name": "timestamp",
-            "type": "u64",
-            "description": "Ledger timestamp"
-          }
-        ],
-        "trigger": "Every successful fee routing call (lock or release)"
-      },
-      {
-        "name": "FeeRoutingSchemaVersionSet",
-        "description": "Upgrade-safe marker recording the fee routing storage schema version",
-        "topics": ["fr_schma"],
-        "data": [
-          {
-            "name": "schema_version",
-            "type": "u32",
-            "description": "Fee routing schema version written to instance storage"
+            "name": "enabled",
+            "type": "bool",
+            "description": "New maintenance mode state"
           },
           {
-            "name": "set_by",
+            "name": "admin",
             "type": "Address",
-            "description": "Admin that triggered the version write"
+            "description": "Admin who toggled maintenance mode"
           },
           {
             "name": "timestamp",
@@ -1159,7 +1320,7 @@
             "description": "Ledger timestamp"
           }
         ],
-        "trigger": "Contract initialization (init)"
+        "trigger": "Admin toggles maintenance mode (state change only)"
       }
     ]
   },
