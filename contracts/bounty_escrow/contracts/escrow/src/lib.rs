@@ -5454,6 +5454,84 @@ impl BountyEscrowContract {
         reentrancy_guard::release(&env);
         result
     }
+
+    // ============================================================================
+    // RISK FLAGS GOVERNANCE
+    // ============================================================================
+
+    /// Updates the risk flags associated with a specific bounty.
+    ///
+    /// # Access Control
+    /// Admin-only.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment.
+    /// * `bounty_id` - The bounty identifier.
+    /// * `new_flags` - The new bitmask of risk flags to apply.
+    pub fn update_risk_flags(env: Env, bounty_id: u64, new_flags: u32) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id))
+            && !env.storage().persistent().has(&DataKey::EscrowAnon(bounty_id))
+        {
+            return Err(Error::BountyNotFound);
+        }
+
+        let mut metadata: EscrowMetadata = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Metadata(bounty_id))
+            .unwrap_or(EscrowMetadata {
+                repo_id: 0,
+                issue_id: 0,
+                bounty_type: soroban_sdk::String::from_str(&env, ""),
+                risk_flags: 0,
+                notification_prefs: 0,
+                reference_hash: None,
+            });
+
+        let previous_flags = metadata.risk_flags;
+        metadata.risk_flags = new_flags;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Metadata(bounty_id), &metadata);
+
+        events::emit_risk_flags_updated(
+            &env,
+            events::RiskFlagsUpdated {
+                version: events::EVENT_VERSION_V2,
+                bounty_id,
+                previous_flags,
+                new_flags,
+                admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Retrieves the current risk flags for a given bounty.
+    pub fn get_risk_flags(env: Env, bounty_id: u64) -> Result<u32, Error> {
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id))
+            && !env.storage().persistent().has(&DataKey::EscrowAnon(bounty_id))
+        {
+            return Err(Error::BountyNotFound);
+        }
+
+        let metadata: Option<EscrowMetadata> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Metadata(bounty_id));
+
+        Ok(metadata.map(|m| m.risk_flags).unwrap_or(0))
+    }
 }
 impl traits::EscrowInterface for BountyEscrowContract {
     /// Lock funds for a bounty through the trait interface

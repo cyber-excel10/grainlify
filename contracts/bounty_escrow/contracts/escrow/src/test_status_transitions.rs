@@ -488,3 +488,52 @@ fn test_partially_refunded_to_released_fails() {
 
     setup.escrow.release_funds(&bounty_id, &setup.contributor);
 }
+
+// ============================================================================
+// RISK FLAGS GOVERNANCE TESTS
+// ============================================================================
+
+#[test]
+fn test_update_risk_flags_success() {
+    let setup = TestSetup::new();
+    let bounty_id = 1;
+    let amount = 1000;
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    // Lock funds to create the initial escrow
+    setup.escrow.lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    // Verify initial risk flags are 0 (no metadata existed yet, fallback applied)
+    assert_eq!(setup.escrow.get_risk_flags(&bounty_id), 0);
+
+    // Update risk flags (e.g., HIGH_RISK = 1, UNDER_REVIEW = 2) -> Bitmask 3
+    let new_flags = 3;
+    setup.escrow.update_risk_flags(&bounty_id, &new_flags);
+
+    // Verify flags persisted in the EscrowMetadata struct
+    assert_eq!(setup.escrow.get_risk_flags(&bounty_id), new_flags);
+    
+    // Clear the flags
+    setup.escrow.update_risk_flags(&bounty_id, &0);
+    assert_eq!(setup.escrow.get_risk_flags(&bounty_id), 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #202)")]
+fn test_update_risk_flags_bounty_not_found() {
+    let setup = TestSetup::new();
+    let missing_bounty_id = 999;
+    
+    // Attempting to flag an escrow that does not exist should throw BountyNotFound (202)
+    setup.escrow.update_risk_flags(&missing_bounty_id, &1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #202)")]
+fn test_get_risk_flags_bounty_not_found() {
+    let setup = TestSetup::new();
+    let missing_bounty_id = 999;
+    
+    // Attempting to read flags from a missing escrow should fail
+    setup.escrow.get_risk_flags(&missing_bounty_id);
+}

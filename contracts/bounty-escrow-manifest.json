@@ -499,6 +499,24 @@
         "authorization": "any",
         "pausable": false,
         "gas_estimate": "low"
+      },
+      {
+        "name": "get_risk_flags",
+        "description": "Get current risk flags for a bounty",
+        "parameters": [
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          }
+        ],
+        "returns": {
+          "type": "u32",
+          "description": "Current risk flags bitmask"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
       }
     ],
     "admin": [
@@ -690,6 +708,29 @@
         "authorization": "admin",
         "pausable": false,
         "gas_estimate": "high"
+      },
+      {
+        "name": "update_risk_flags",
+        "description": "Updates the risk flags for a specific bounty",
+        "parameters": [
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          },
+          {
+            "name": "new_flags",
+            "type": "u32",
+            "description": "New bitmask of risk flags"
+          }
+        ],
+        "returns": {
+          "type": "()",
+          "description": "Empty on success"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
       }
     ]
   },
