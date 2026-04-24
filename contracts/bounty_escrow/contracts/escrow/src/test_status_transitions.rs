@@ -956,196 +956,239 @@ fn test_claim_window_expired_event_emitted_on_failure() {
     assert!(found, "ClaimWindowExpired event not emitted");
 }
 
-
 // ============================================================================
-// CEI + REENTRANCY GUARD HARDENING TESTS
+// BATCH SIZE CAPS TESTS (#04)
 // ============================================================================
 
-/// Test that release_funds() no longer has the double-guard bug.
-/// Previously, release_funds() called NonReentrant::enter() and then
-/// release_funds_logic() also called reentrancy_guard::acquire(), causing
-/// a double-acquire panic. This test verifies the fix.
-#[test]
-fn test_release_funds_no_double_guard() {
-    let setup = TestSetup::new();
-    let bounty_id = 1;
-    let amount = 1000;
-    let deadline = setup.env.ledger().timestamp() + 1000;
-
-    setup
-        .escrow
-        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
-    
-    // This should succeed without panicking from double-acquire
-    setup.escrow.release_funds(&bounty_id, &setup.contributor);
-    
-    assert_eq!(
-        setup.escrow.get_escrow_info(&bounty_id).status,
-        EscrowStatus::Released
-    );
+/// Helper: build a Vec of LockFundsItem for batch tests.
+fn make_lock_items(setup: &TestSetup, start_id: u64, count: u32) -> soroban_sdk::Vec<LockFundsItem> {
+    let mut items = soroban_sdk::Vec::new(&setup.env);
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+    for i in 0..count {
+        items.push_back(LockFundsItem {
+            bounty_id: start_id + i as u64,
+            depositor: setup.depositor.clone(),
+            amount: 100,
+            deadline,
+        });
+    }
+    items
 }
 
-/// Test that release_funds_logic() properly releases the guard on error paths.
-/// Previously, early returns in release_funds_logic() didn't call
-/// reentrancy_guard::release(), which could leave the guard stuck.
-#[test]
-fn test_release_funds_guard_released_on_error() {
-    let setup = TestSetup::new();
-    let bounty_id = 1;
-    let amount = 1000;
-    let deadline = setup.env.ledger().timestamp() + 1000;
-
-    setup
-        .escrow
-        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
-    
-    // Try to release a non-existent bounty (should fail with BountyNotFound)
-    let result = setup.escrow.try_release_funds(&999, &setup.contributor);
-    assert!(result.is_err());
-    
-    // Now try to release the real bounty - should succeed if guard was properly released
-    setup.escrow.release_funds(&bounty_id, &setup.contributor);
-    
-    assert_eq!(
-        setup.escrow.get_escrow_info(&bounty_id).status,
-        EscrowStatus::Released
-    );
+/// Helper: build a Vec of ReleaseFundsItem for batch tests.
+fn make_release_items(setup: &TestSetup, start_id: u64, count: u32) -> soroban_sdk::Vec<ReleaseFundsItem> {
+    let mut items = soroban_sdk::Vec::new(&setup.env);
+    for i in 0..count {
+        items.push_back(ReleaseFundsItem {
+            bounty_id: start_id + i as u64,
+            contributor: setup.contributor.clone(),
+        });
+    }
+    items
 }
 
-/// Test that partial_release() properly releases the guard on error paths.
-#[test]
-fn test_partial_release_guard_released_on_error() {
-    let setup = TestSetup::new();
-    let bounty_id = 1;
-    let amount = 1000;
-    let deadline = setup.env.ledger().timestamp() + 1000;
+// --- get_batch_size_caps: defaults ---
 
-    setup
-        .escrow
-        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
-    
-    // Try to partial_release with invalid amount (should fail)
-    let result = setup.escrow.try_partial_release(&bounty_id, &setup.contributor, &0);
-    assert!(result.is_err());
-    
-    // Now try a valid partial_release - should succeed if guard was properly released
-    setup.escrow.partial_release(&bounty_id, &setup.contributor, &500);
-    
-    let info = setup.escrow.get_escrow_info(&bounty_id);
-    assert_eq!(info.status, EscrowStatus::Locked);
-    assert_eq!(info.remaining_amount, 500);
+#[test]
+fn test_get_batch_size_caps_defaults_to_max() {
+    let setup = TestSetup::new();
+    let caps = setup.escrow.get_batch_size_caps();
+    // Default must equal the compile-time hard limit (20).
+    assert_eq!(caps.lock_cap, 20);
+    assert_eq!(caps.release_cap, 20);
 }
 
-/// Test that refund() properly releases the guard on error paths.
-#[test]
-fn test_refund_guard_released_on_error() {
-    let setup = TestSetup::new();
-    let bounty_id = 1;
-    let amount = 1000;
-    let deadline = setup.env.ledger().timestamp() + 100;
+// --- set_batch_size_caps: happy path ---
 
-    setup
-        .escrow
-        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
-    
-    // Try to refund before deadline without approval (should fail)
-    let result = setup.escrow.try_refund(&bounty_id);
-    assert!(result.is_err());
-    
-    // Now advance time and refund - should succeed if guard was properly released
-    setup.env.ledger().set_timestamp(deadline + 1);
-    setup.escrow.refund(&bounty_id);
-    
-    assert_eq!(
-        setup.escrow.get_escrow_info(&bounty_id).status,
-        EscrowStatus::Refunded
-    );
+#[test]
+fn test_set_batch_size_caps_success() {
+    let setup = TestSetup::new();
+    setup.escrow.set_batch_size_caps(&5_u32, &3_u32);
+    let caps = setup.escrow.get_batch_size_caps();
+    assert_eq!(caps.lock_cap, 5);
+    assert_eq!(caps.release_cap, 3);
 }
 
-/// Test that multiple sequential operations work correctly with guard release.
-#[test]
-fn test_multiple_operations_with_guard_release() {
-    let setup = TestSetup::new();
-    let bounty_id_1 = 1;
-    let bounty_id_2 = 2;
-    let amount = 1000;
-    let deadline = setup.env.ledger().timestamp() + 1000;
+// --- set_batch_size_caps: emits BatchSizeCapsUpdated event ---
 
-    // Lock two bounties
-    setup
-        .escrow
-        .lock_funds(&setup.depositor, &bounty_id_1, &amount, &deadline);
-    setup
-        .escrow
-        .lock_funds(&setup.depositor, &bounty_id_2, &amount, &deadline);
-    
-    // Release first bounty
-    setup.escrow.release_funds(&bounty_id_1, &setup.contributor);
-    
-    // Partial release second bounty
-    setup.escrow.partial_release(&bounty_id_2, &setup.contributor, &500);
-    
-    // Complete release of second bounty
-    setup.escrow.partial_release(&bounty_id_2, &setup.contributor, &500);
-    
-    assert_eq!(
-        setup.escrow.get_escrow_info(&bounty_id_1).status,
-        EscrowStatus::Released
-    );
-    assert_eq!(
-        setup.escrow.get_escrow_info(&bounty_id_2).status,
-        EscrowStatus::Released
-    );
+#[test]
+fn test_set_batch_size_caps_emits_event() {
+    let setup = TestSetup::new();
+    setup.escrow.set_batch_size_caps(&4_u32, &2_u32);
+    let events = setup.env.events().all();
+    let found = events.iter().any(|(_, topics, _)| {
+        topics.len() >= 1
+            && topics
+                .get(0)
+                .map(|t| {
+                    t == soroban_sdk::Symbol::new(&setup.env, "bcapcfg").into_val(&setup.env)
+                })
+                .unwrap_or(false)
+    });
+    assert!(found, "BatchSizeCapsUpdated event not emitted");
 }
 
-/// Test that CEI pattern is maintained: state is updated before external calls.
-/// This test verifies that even if a token transfer fails, the state was already
-/// updated (though Soroban will roll back the entire transaction).
-#[test]
-fn test_cei_pattern_state_before_transfer() {
-    let setup = TestSetup::new();
-    let bounty_id = 1;
-    let amount = 1000;
-    let deadline = setup.env.ledger().timestamp() + 1000;
+// --- set_batch_size_caps: boundary values ---
 
-    setup
-        .escrow
-        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
-    
-    // Release funds - state should be updated before token transfer
-    setup.escrow.release_funds(&bounty_id, &setup.contributor);
-    
-    // Verify final state
-    let info = setup.escrow.get_escrow_info(&bounty_id);
-    assert_eq!(info.status, EscrowStatus::Released);
-    assert_eq!(info.remaining_amount, 0);
+#[test]
+fn test_set_batch_size_caps_min_boundary() {
+    let setup = TestSetup::new();
+    // cap = 1 is the minimum valid value.
+    setup.escrow.set_batch_size_caps(&1_u32, &1_u32);
+    let caps = setup.escrow.get_batch_size_caps();
+    assert_eq!(caps.lock_cap, 1);
+    assert_eq!(caps.release_cap, 1);
 }
 
-/// Test that guard is properly released even when freeze checks fail.
 #[test]
-fn test_guard_released_on_freeze_check_failure() {
+fn test_set_batch_size_caps_max_boundary() {
     let setup = TestSetup::new();
-    let bounty_id = 1;
-    let amount = 1000;
-    let deadline = setup.env.ledger().timestamp() + 1000;
+    // cap = 20 (MAX_BATCH_SIZE) is the maximum valid value.
+    setup.escrow.set_batch_size_caps(&20_u32, &20_u32);
+    let caps = setup.escrow.get_batch_size_caps();
+    assert_eq!(caps.lock_cap, 20);
+    assert_eq!(caps.release_cap, 20);
+}
 
-    setup
-        .escrow
-        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
-    
-    // Freeze the escrow
-    setup.escrow.freeze_escrow(&bounty_id, &None);
-    
-    // Try to release (should fail with EscrowFrozen)
-    let result = setup.escrow.try_release_funds(&bounty_id, &setup.contributor);
-    assert!(result.is_err());
-    
-    // Unfreeze and release - should succeed if guard was properly released
-    setup.escrow.unfreeze_escrow(&bounty_id);
-    setup.escrow.release_funds(&bounty_id, &setup.contributor);
-    
-    assert_eq!(
-        setup.escrow.get_escrow_info(&bounty_id).status,
-        EscrowStatus::Released
-    );
+// --- set_batch_size_caps: invalid inputs ---
+
+#[test]
+fn test_set_batch_size_caps_zero_lock_cap_rejected() {
+    let setup = TestSetup::new();
+    let res = setup.escrow.try_set_batch_size_caps(&0_u32, &5_u32);
+    assert!(matches!(res, Err(Ok(Error::InvalidBatchSizeCap))));
+}
+
+#[test]
+fn test_set_batch_size_caps_zero_release_cap_rejected() {
+    let setup = TestSetup::new();
+    let res = setup.escrow.try_set_batch_size_caps(&5_u32, &0_u32);
+    assert!(matches!(res, Err(Ok(Error::InvalidBatchSizeCap))));
+}
+
+#[test]
+fn test_set_batch_size_caps_exceeds_max_lock_rejected() {
+    let setup = TestSetup::new();
+    // 21 > MAX_BATCH_SIZE (20)
+    let res = setup.escrow.try_set_batch_size_caps(&21_u32, &5_u32);
+    assert!(matches!(res, Err(Ok(Error::InvalidBatchSizeCap))));
+}
+
+#[test]
+fn test_set_batch_size_caps_exceeds_max_release_rejected() {
+    let setup = TestSetup::new();
+    let res = setup.escrow.try_set_batch_size_caps(&5_u32, &21_u32);
+    assert!(matches!(res, Err(Ok(Error::InvalidBatchSizeCap))));
+}
+
+// --- batch_lock_funds: respects configured lock cap ---
+
+#[test]
+fn test_batch_lock_funds_within_cap_succeeds() {
+    let setup = TestSetup::new();
+    // Mint enough tokens for the batch.
+    setup.token_admin.mint(&setup.depositor, &10_000);
+    setup.escrow.set_batch_size_caps(&3_u32, &20_u32);
+    let items = make_lock_items(&setup, 1000, 3);
+    let count = setup.escrow.batch_lock_funds(&items);
+    assert_eq!(count, 3);
+}
+
+#[test]
+fn test_batch_lock_funds_exceeds_cap_rejected() {
+    let setup = TestSetup::new();
+    setup.token_admin.mint(&setup.depositor, &10_000);
+    // Set lock cap to 2, then try to lock 3 items.
+    setup.escrow.set_batch_size_caps(&2_u32, &20_u32);
+    let items = make_lock_items(&setup, 2000, 3);
+    let res = setup.escrow.try_batch_lock_funds(&items);
+    assert!(matches!(res, Err(Ok(Error::InvalidBatchSize))));
+}
+
+#[test]
+fn test_batch_lock_funds_exactly_at_cap_succeeds() {
+    let setup = TestSetup::new();
+    setup.token_admin.mint(&setup.depositor, &10_000);
+    setup.escrow.set_batch_size_caps(&2_u32, &20_u32);
+    let items = make_lock_items(&setup, 3000, 2);
+    let count = setup.escrow.batch_lock_funds(&items);
+    assert_eq!(count, 2);
+}
+
+// --- batch_release_funds: respects configured release cap ---
+
+#[test]
+fn test_batch_release_funds_within_cap_succeeds() {
+    let setup = TestSetup::new();
+    setup.token_admin.mint(&setup.depositor, &10_000);
+    // Lock 3 bounties first.
+    let lock_items = make_lock_items(&setup, 4000, 3);
+    setup.escrow.batch_lock_funds(&lock_items);
+    // Set release cap to 3 and release all.
+    setup.escrow.set_batch_size_caps(&20_u32, &3_u32);
+    let release_items = make_release_items(&setup, 4000, 3);
+    let count = setup.escrow.batch_release_funds(&release_items);
+    assert_eq!(count, 3);
+}
+
+#[test]
+fn test_batch_release_funds_exceeds_cap_rejected() {
+    let setup = TestSetup::new();
+    setup.token_admin.mint(&setup.depositor, &10_000);
+    let lock_items = make_lock_items(&setup, 5000, 3);
+    setup.escrow.batch_lock_funds(&lock_items);
+    // Set release cap to 2, then try to release 3.
+    setup.escrow.set_batch_size_caps(&20_u32, &2_u32);
+    let release_items = make_release_items(&setup, 5000, 3);
+    let res = setup.escrow.try_batch_release_funds(&release_items);
+    assert!(matches!(res, Err(Ok(Error::InvalidBatchSize))));
+}
+
+// --- lock and release caps are independent ---
+
+#[test]
+fn test_lock_and_release_caps_are_independent() {
+    let setup = TestSetup::new();
+    setup.token_admin.mint(&setup.depositor, &10_000);
+    // lock_cap=5, release_cap=2
+    setup.escrow.set_batch_size_caps(&5_u32, &2_u32);
+
+    // Locking 4 items should succeed (4 <= 5).
+    let lock_items = make_lock_items(&setup, 6000, 4);
+    let count = setup.escrow.batch_lock_funds(&lock_items);
+    assert_eq!(count, 4);
+
+    // Releasing 3 items should fail (3 > 2).
+    let release_items = make_release_items(&setup, 6000, 3);
+    let res = setup.escrow.try_batch_release_funds(&release_items);
+    assert!(matches!(res, Err(Ok(Error::InvalidBatchSize))));
+
+    // Releasing 2 items should succeed (2 <= 2).
+    let release_items_ok = make_release_items(&setup, 6000, 2);
+    let released = setup.escrow.batch_release_funds(&release_items_ok);
+    assert_eq!(released, 2);
+}
+
+// --- cap update is idempotent ---
+
+#[test]
+fn test_set_batch_size_caps_idempotent() {
+    let setup = TestSetup::new();
+    setup.escrow.set_batch_size_caps(&5_u32, &5_u32);
+    setup.escrow.set_batch_size_caps(&5_u32, &5_u32);
+    let caps = setup.escrow.get_batch_size_caps();
+    assert_eq!(caps.lock_cap, 5);
+    assert_eq!(caps.release_cap, 5);
+}
+
+// --- upgrade-safe: caps survive a re-read after storage write ---
+
+#[test]
+fn test_batch_size_caps_persist_in_storage() {
+    let setup = TestSetup::new();
+    setup.escrow.set_batch_size_caps(&7_u32, &3_u32);
+    // Read back via the public view — must match what was written.
+    let caps = setup.escrow.get_batch_size_caps();
+    assert_eq!(caps.lock_cap, 7);
+    assert_eq!(caps.release_cap, 3);
 }

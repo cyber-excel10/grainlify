@@ -92,6 +92,27 @@ pub fn emit_bounty_initialized(env: &Env, event: BountyEscrowInitialized) {
     env.events().publish(topics, event.clone());
 }
 
+pub fn emit_admin_proposed(e: &Env, old: Address, new: Address) {
+    e.events().publish(
+        (symbol_short!("admin_prop"),),
+        (old, new),
+    );
+}
+
+pub fn emit_admin_transferred(e: &Env, old: Address, new: Address) {
+    e.events().publish(
+        (symbol_short!("admin_tx"),),
+        (old, new),
+    );
+}
+
+pub fn emit_admin_transfer_cancelled(e: &Env, admin: Address) {
+    e.events().publish(
+        (symbol_short!("admin_cancel"),),
+        (admin,),
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADMIN ROTATION EVENTS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -861,7 +882,7 @@ pub fn emit_deprecation_state_changed(env: &Env, event: DeprecationStateChanged)
 /// Payload for the [`emit_maintenance_mode_changed`] event.
 ///
 /// Emitted when maintenance mode is toggled by the admin.
-/// When enabled, all critical operations return `FundsPaused` 
+/// When enabled, all critical operations return `FundsPaused`
 /// (superseding granular pause flags).
 ///
 /// ### Topics
@@ -956,6 +977,30 @@ pub fn emit_participant_filter_entry_updated(env: &Env, event: ParticipantFilter
     env.events().publish(topics, event);
 }
 
+/// Payload emitted after every `query_whitelist` / `query_blocklist` call for
+/// off-chain audit trails.
+///
+/// ### Topics
+/// | Index | Value |
+/// |-------|-------|
+/// | 0 | `"pf_query"` |
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantFilterQueried {
+    pub list_type: ParticipantFilterListType,
+    pub offset: u32,
+    pub limit: u32,
+    pub result_count: u32,
+    pub total: u32,
+    pub timestamp: u64,
+}
+
+/// Emit [`ParticipantFilterQueried`]
+pub fn emit_participant_filter_queried(env: &Env, event: ParticipantFilterQueried) {
+    let topics = (symbol_short!("pf_query"),);
+    env.events().publish(topics, event);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // RISK FLAG EVENTS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -991,6 +1036,48 @@ pub struct RiskFlagsUpdated {
 /// Emit [`RiskFlagsUpdated`]
 pub fn emit_risk_flags_updated(env: &Env, event: RiskFlagsUpdated) {
     let topics = (symbol_short!("risk"), event.bounty_id);
+    env.events().publish(topics, event);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// METADATA EVENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Payload for the [`emit_metadata_updated`] event.
+///
+/// Emitted when bounty metadata is updated via
+/// [`BountyEscrowContract::update_metadata`].
+///
+/// ### Topics
+/// | Index | Value |
+/// |-------|-------|
+/// | 0 | `"metadata"` |
+/// | 1 | `bounty_id: u64` |
+///
+/// ### Security notes
+/// - Captures the admin performing the update for audit trail.
+/// - Includes the previous and new values for each field to allow
+///   off-chain indexers to track metadata evolution.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MetadataUpdated {
+    pub version: u32,
+    pub bounty_id: u64,
+    pub admin: Address,
+    pub previous_repo_id: u64,
+    pub new_repo_id: u64,
+    pub previous_issue_id: u64,
+    pub new_issue_id: u64,
+    pub previous_bounty_type: soroban_sdk::String,
+    pub new_bounty_type: soroban_sdk::String,
+    pub previous_reference_hash: Option<soroban_sdk::Bytes>,
+    pub new_reference_hash: Option<soroban_sdk::Bytes>,
+    pub timestamp: u64,
+}
+
+/// Emit [`MetadataUpdated`]
+pub fn emit_metadata_updated(env: &Env, event: MetadataUpdated) {
+    let topics = (symbol_short!("metadata"), event.bounty_id);
     env.events().publish(topics, event);
 }
 
@@ -1769,57 +1856,28 @@ pub fn emit_fee_routing_schema_version_set(env: &Env, event: FeeRoutingSchemaVer
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// REENTRANCY GUARD AUDIT EVENTS
+// HIGH-VALUE TIMELOCK QUEUE CANCELLATION EVENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Payload emitted when the reentrancy guard is acquired at the start of a
-/// protected function.
-///
-/// Provides a CEI audit trail: indexers can verify that every `acquired` event
-/// is followed by a matching `released` event within the same transaction.
+/// Emitted when an admin cancels a pending high-value queued release.
 ///
 /// ### Topics
 /// | Index | Value |
 /// |-------|-------|
-/// | 0 | `"rg_acq"` |
-///
-/// ### Security notes
-/// - Emitted **before** any state mutation or external call.
-/// - `function` is a short symbol identifying the protected entry-point.
+/// | 0 | `"hv_cncl"` |
+/// | 1 | `bounty_id: u64` |
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReentrancyGuardAcquired {
+pub struct ReleaseQueueCancelled {
     pub version: u32,
-    /// Short symbol naming the protected function (e.g. `"lock"`, `"release"`).
-    pub function: soroban_sdk::Symbol,
+    pub bounty_id: u64,
+    pub contributor: Address,
+    pub amount: i128,
+    pub admin: Address,
     pub timestamp: u64,
 }
 
-/// Emit [`ReentrancyGuardAcquired`].
-pub fn emit_reentrancy_guard_acquired(env: &Env, event: ReentrancyGuardAcquired) {
-    let topics = (symbol_short!("rg_acq"),);
-    env.events().publish(topics, event);
-}
-
-/// Payload emitted when the reentrancy guard is released at the end of a
-/// protected function (success path only; panics roll back all state including
-/// the guard flag automatically).
-///
-/// ### Topics
-/// | Index | Value |
-/// |-------|-------|
-/// | 0 | `"rg_rel"` |
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReentrancyGuardReleased {
-    pub version: u32,
-    /// Short symbol naming the protected function.
-    pub function: soroban_sdk::Symbol,
-    pub timestamp: u64,
-}
-
-/// Emit [`ReentrancyGuardReleased`].
-pub fn emit_reentrancy_guard_released(env: &Env, event: ReentrancyGuardReleased) {
-    let topics = (symbol_short!("rg_rel"),);
+pub fn emit_release_queue_cancelled(env: &Env, event: ReleaseQueueCancelled) {
+    let topics = (symbol_short!("hv_cncl"), event.bounty_id);
     env.events().publish(topics, event);
 }
