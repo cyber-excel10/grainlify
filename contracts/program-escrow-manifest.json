@@ -3,7 +3,7 @@
   "contract_name": "ProgramEscrowContract",
   "contract_purpose": "Handles hackathon and program prize pools with batch payouts, dependency management, circuit breaker protection, and comprehensive monitoring",
   "version": {
-    "current": "2.5.0",
+    "current": "2.6.0",
     "schema": "1.0.0",
     "history": [
       {
@@ -61,32 +61,37 @@
         ]
       },
       {
-        "version": "2.4.0",
+        "version": "2.5.0",
         "release_date": "2026-04-23",
         "changes": [
-          "Added PauseStateChangedV2 audit event with version, previous_paused, and receipt_id fields for deterministic state-transition tracking",
-          "PauseStateChangedV2 is emitted alongside PauseStateChanged on every set_paused call for backward compatibility",
-          "Added PauseSchemaVersion DataKey — upgrade-safe storage marker written at init",
-          "Added PAUSE_SCHEMA_VERSION_V1 constant (value: 1)",
-          "Added get_pause_schema_version() view entrypoint — returns 0 for legacy pre-v1 contracts",
-          "Pause checks remain deterministic: release_paused blocks single_payout and batch_payout; lock_paused blocks lock_program_funds; flags are orthogonal",
-          "Added 16 targeted tests in test.rs covering pause invariants, V2 event fields, schema version, and edge cases"
+          "Added token allowlist enforcement: only explicitly permitted token contract addresses may be used in init_program / initialize_program when the allowlist is non-empty",
+          "Empty allowlist disables enforcement (backward-compatible default — any token accepted)",
+          "Added add_allowed_token(token) admin entrypoint — adds token to allowlist, emits TokenAllowlistUpdatedEvent(added=true)",
+          "Added remove_allowed_token(token) admin entrypoint — removes token from allowlist, emits TokenAllowlistUpdatedEvent(added=false); removing last token re-disables enforcement",
+          "Added is_token_allowed(token) view entrypoint — returns true when list is empty or token is listed",
+          "Added get_allowed_tokens() view entrypoint — returns current allowlist snapshot",
+          "Added get_token_allowlist_schema_version() view entrypoint — returns TOKEN_ALLOWLIST_SCHEMA_VERSION_V1 (1) for upgraded contracts, 0 for legacy",
+          "Added TokenAllowlistUpdatedEvent audit event (version, token, added, updated_by, timestamp) emitted on every add/remove",
+          "Added TokenRejectedEvent audit event (version, token, program_id, timestamp) emitted before panic on rejected init_program calls",
+          "Added TokenAllowlistSchemaVersionSet audit event emitted once during initialize_contract for upgrade-safe schema tracking",
+          "Added DataKey::TokenAllowlist and DataKey::TokenAllowlistSchemaVersion upgrade-safe storage keys",
+          "Added TOKEN_ALLOWLIST_SCHEMA_VERSION_V1 constant (value: 1)",
+          "Added ContractError::TokenNotAllowed (code 1100), TokenAlreadyAllowed (1101), TokenNotInAllowlist (1102) to canonical error enum",
+          "Deterministic error ordering preserved: allowlist check runs before any state mutation in init_program",
+          "Added 22 targeted tests in test_token_allowlist.rs covering all branches, event fields, admin guards, and edge cases"
         ]
       },
       {
-        "version": "2.5.0",
+        "version": "2.6.0",
         "release_date": "2026-04-24",
         "changes": [
-          "Added two-step admin rotation: propose_admin / accept_admin / cancel_admin_rotation",
-          "Added two-step per-program controller rotation: propose_controller / accept_controller / cancel_controller_rotation",
-          "Added DataKey::PendingAdmin (instance storage) for pending admin handoff",
-          "Added DataKey::PendingController(String) (instance storage) for pending controller handoff per program",
-          "Added 6 audit events: AdminProposedEvent, AdminAcceptedEvent, AdminRotationCancelledEvent, ControllerProposedEvent, ControllerAcceptedEvent, ControllerRotationCancelledEvent",
-          "Added ContractError codes: AdminRotationPending=1200, NoPendingAdminRotation=1201, ControllerRotationPending=1202, NoPendingControllerRotation=1203",
-          "Added 12 targeted tests (RC-01..RC-12) covering propose/accept/cancel paths, duplicate-pending panics, no-pending panics, and state invariants"
-        ]
-      }
-          "Deterministic error ordering preserved: threshold check runs before balance and circuit-breaker checks"
+          "Added query_payouts_by_recipient: paginated payout history filtered by recipient",
+          "Added query_payouts_by_amount: paginated payout history filtered by amount range",
+          "Added query_payouts_by_timestamp: paginated payout history filtered by timestamp range",
+          "Added query_schedules_by_recipient: paginated release schedules filtered by recipient",
+          "Added query_schedules_by_status: paginated release schedules filtered by status",
+          "Added query_releases_by_recipient: paginated release history filtered by recipient",
+          "Pagination enforces limit 1\u2013200 via HistoryPaginationConfig with upgrade-safe storage"
         ]
       }
     ]
@@ -205,7 +210,7 @@
       },
       {
         "name": "batch_payout",
-        "description": "Distribute prizes to multiple winners",
+        "description": "Distribute prizes to multiple winners with optional idempotency key for retry safety",
         "parameters": [
           {
             "name": "winners",
@@ -216,6 +221,12 @@
             "name": "amounts",
             "type": "Vec<i128>",
             "description": "Corresponding prize amounts"
+          },
+          {
+            "name": "idempotency_key",
+            "type": "Option<String>",
+            "description": "Optional idempotency key for deterministic retry behavior",
+            "optional": true
           }
         ],
         "returns": {
@@ -228,7 +239,7 @@
       },
       {
         "name": "single_payout",
-        "description": "Distribute prize to single winner",
+        "description": "Distribute prize to single winner with optional idempotency key for retry safety",
         "parameters": [
           {
             "name": "winner",
@@ -239,6 +250,12 @@
             "name": "amount",
             "type": "i128",
             "description": "Prize amount"
+          },
+          {
+            "name": "idempotency_key",
+            "type": "Option<String>",
+            "description": "Optional idempotency key for deterministic retry behavior",
+            "optional": true
           }
         ],
         "returns": {
@@ -248,6 +265,72 @@
         "authorization": "admin",
         "pausable": true,
         "gas_estimate": "medium"
+      },
+      {
+        "name": "single_payout_idempotent",
+        "description": "Distribute prize to single winner with idempotency key. Panics with 'Payout already processed' if the key was already used for a successful payout — callers should treat this as a success.",
+        "parameters": [
+          {
+            "name": "idempotency_key",
+            "type": "String",
+            "description": "Caller-supplied opaque string used to deduplicate payout submissions. Must be unique per logical payout."
+          },
+          {
+            "name": "recipient",
+            "type": "Address",
+            "description": "Winner address"
+          },
+          {
+            "name": "amount",
+            "type": "i128",
+            "description": "Prize amount"
+          }
+        ],
+        "returns": {
+          "type": "ProgramData",
+          "description": "Updated program data"
+        },
+        "authorization": "admin",
+        "pausable": true,
+        "gas_estimate": "medium",
+        "security_notes": [
+          "Idempotency check runs before all state reads — duplicate submissions are rejected cheaply.",
+          "Key is stored in persistent storage after all token transfers succeed (CEI ordering).",
+          "Persistent storage ensures keys survive contract upgrades."
+        ]
+      },
+      {
+        "name": "batch_payout_idempotent",
+        "description": "Distribute prizes to multiple winners with idempotency key. Panics with 'Payout already processed' if the key was already used for a successful batch payout.",
+        "parameters": [
+          {
+            "name": "idempotency_key",
+            "type": "String",
+            "description": "Caller-supplied opaque string used to deduplicate batch payout submissions."
+          },
+          {
+            "name": "recipients",
+            "type": "Vec<Address>",
+            "description": "Array of winner addresses"
+          },
+          {
+            "name": "amounts",
+            "type": "Vec<i128>",
+            "description": "Corresponding prize amounts"
+          }
+        ],
+        "returns": {
+          "type": "ProgramData",
+          "description": "Updated program data"
+        },
+        "authorization": "admin",
+        "pausable": true,
+        "gas_estimate": "high",
+        "security_notes": [
+          "Idempotency check runs before all state reads — duplicate submissions are rejected cheaply.",
+          "Key is stored in persistent storage after all token transfers succeed (CEI ordering).",
+          "Persistent storage ensures keys survive contract upgrades."
+        ]
       },
       {
         "name": "set_program_spend_threshold",
@@ -269,6 +352,39 @@
           "description": "Empty on success"
         },
         "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "set_program_spending_limit",
+        "description": "Set or update the per-window spending limit for a program. Only the program's authorized_payout_key may call this.",
+        "parameters": [
+          {
+            "name": "program_id",
+            "type": "String",
+            "description": "Program identifier"
+          },
+          {
+            "name": "window_size",
+            "type": "u64",
+            "description": "Window length in seconds (must be > 0)"
+          },
+          {
+            "name": "max_amount",
+            "type": "i128",
+            "description": "Maximum total releasable in one window (must be >= 0)"
+          },
+          {
+            "name": "enabled",
+            "type": "bool",
+            "description": "If false, config is stored but not enforced"
+          }
+        ],
+        "returns": {
+          "type": "()",
+          "description": "Empty on success"
+        },
+        "authorization": "authorized_payout_key",
         "pausable": false,
         "gas_estimate": "low"
       },
@@ -502,6 +618,42 @@
         "gas_estimate": "low"
       },
       {
+        "name": "get_program_spending_limit",
+        "description": "Return the per-window spending limit configuration for a program, or None if not set.",
+        "parameters": [
+          {
+            "name": "program_id",
+            "type": "String",
+            "description": "Program identifier"
+          }
+        ],
+        "returns": {
+          "type": "Option<ProgramSpendingConfig>",
+          "description": "Spending limit config (window_size, max_amount, enabled), or None"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_program_spending_state",
+        "description": "Return the current window state for a program's spending limit, or None if no payout has occurred yet.",
+        "parameters": [
+          {
+            "name": "program_id",
+            "type": "String",
+            "description": "Program identifier"
+          }
+        ],
+        "returns": {
+          "type": "Option<ProgramSpendingState>",
+          "description": "Window state (window_start, amount_released), or None"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
         "name": "get_program_release_schedules",
         "description": "Get release schedules for all programs",
         "parameters": [],
@@ -566,6 +718,184 @@
         "authorization": "any",
         "pausable": false,
         "gas_estimate": "low"
+      },
+      {
+        "name": "query_payouts_by_recipient",
+        "description": "Paginated payout history filtered by recipient address",
+        "parameters": [
+          {
+            "name": "recipient",
+            "type": "Address",
+            "description": "Recipient address to filter by"
+          },
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Number of matching records to skip"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Maximum records to return (1\u2013200)"
+          }
+        ],
+        "returns": {
+          "type": "Vec<PayoutRecord>",
+          "description": "Paginated payout records for the recipient"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "medium"
+      },
+      {
+        "name": "query_payouts_by_amount",
+        "description": "Paginated payout history filtered by amount range (inclusive)",
+        "parameters": [
+          {
+            "name": "min_amount",
+            "type": "i128",
+            "description": "Minimum payout amount (inclusive)"
+          },
+          {
+            "name": "max_amount",
+            "type": "i128",
+            "description": "Maximum payout amount (inclusive)"
+          },
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Number of matching records to skip"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Maximum records to return (1\u2013200)"
+          }
+        ],
+        "returns": {
+          "type": "Vec<PayoutRecord>",
+          "description": "Paginated payout records within the amount range"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "medium"
+      },
+      {
+        "name": "query_payouts_by_timestamp",
+        "description": "Paginated payout history filtered by timestamp range (inclusive)",
+        "parameters": [
+          {
+            "name": "min_timestamp",
+            "type": "u64",
+            "description": "Start of timestamp range (inclusive)"
+          },
+          {
+            "name": "max_timestamp",
+            "type": "u64",
+            "description": "End of timestamp range (inclusive)"
+          },
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Number of matching records to skip"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Maximum records to return (1\u2013200)"
+          }
+        ],
+        "returns": {
+          "type": "Vec<PayoutRecord>",
+          "description": "Paginated payout records within the timestamp range"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "medium"
+      },
+      {
+        "name": "query_schedules_by_recipient",
+        "description": "Paginated release schedules filtered by recipient address",
+        "parameters": [
+          {
+            "name": "recipient",
+            "type": "Address",
+            "description": "Recipient address to filter by"
+          },
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Number of matching records to skip"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Maximum records to return (1\u2013200)"
+          }
+        ],
+        "returns": {
+          "type": "Vec<ProgramReleaseSchedule>",
+          "description": "Paginated release schedules for the recipient"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "medium"
+      },
+      {
+        "name": "query_schedules_by_status",
+        "description": "Paginated release schedules filtered by released status",
+        "parameters": [
+          {
+            "name": "released",
+            "type": "bool",
+            "description": "True for released schedules, false for pending"
+          },
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Number of matching records to skip"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Maximum records to return (1\u2013200)"
+          }
+        ],
+        "returns": {
+          "type": "Vec<ProgramReleaseSchedule>",
+          "description": "Paginated release schedules matching the status"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "medium"
+      },
+      {
+        "name": "query_releases_by_recipient",
+        "description": "Paginated release history filtered by recipient address",
+        "parameters": [
+          {
+            "name": "recipient",
+            "type": "Address",
+            "description": "Recipient address to filter by"
+          },
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Number of matching records to skip"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Maximum records to return (1\u2013200)"
+          }
+        ],
+        "returns": {
+          "type": "Vec<ProgramReleaseHistory>",
+          "description": "Paginated release history records for the recipient"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "medium"
       }
     ],
     "admin": [
@@ -949,6 +1279,12 @@
         "type": "instance",
         "description": "Release schedules",
         "data_structure": "Vec<ProgramReleaseSchedule>"
+      },
+      {
+        "name": "DataKey::IdempotencyKey(String)",
+        "type": "persistent",
+        "description": "Idempotency key for payout deduplication. Key is the caller-supplied opaque string; value is bool (true = processed). Stored in persistent storage so it survives contract upgrades.",
+        "data_structure": "bool"
       }
     ]
   },
@@ -1047,28 +1383,10 @@
         "resolution": "Remove circular dependency references"
       },
       {
-        "error_code": "AdminRotationPending",
-        "numeric_code": 1200,
-        "scenario": "propose_admin called while a rotation is already pending",
-        "resolution": "Cancel the existing proposal with cancel_admin_rotation before proposing a new one"
-      },
-      {
-        "error_code": "NoPendingAdminRotation",
-        "numeric_code": 1201,
-        "scenario": "accept_admin or cancel_admin_rotation called with no pending rotation",
-        "resolution": "Call propose_admin first"
-      },
-      {
-        "error_code": "ControllerRotationPending",
-        "numeric_code": 1202,
-        "scenario": "propose_controller called while a rotation is already pending for that program",
-        "resolution": "Cancel the existing proposal with cancel_controller_rotation before proposing a new one"
-      },
-      {
-        "error_code": "NoPendingControllerRotation",
-        "numeric_code": 1203,
-        "scenario": "accept_controller or cancel_controller_rotation called with no pending rotation",
-        "resolution": "Call propose_controller first"
+        "error_code": "PayoutAlreadyProcessed",
+        "numeric_code": 1100,
+        "scenario": "Submitting a payout with an idempotency key that was already used for a successful payout",
+        "resolution": "Treat as success — the funds were already transferred. Use is_payout_processed to query key status before retrying."
       }
     ],
     "gas_considerations": [
@@ -1200,38 +1518,102 @@
       {
         "name": "SpendLimitSetEvent",
         "description": "Audit event emitted after every set_program_spend_threshold call",
-        "topics": ["SpLimSet", "program_id"],
+        "topics": [
+          "SpLimSet",
+          "program_id"
+        ],
         "data": [
-          {"name": "version", "type": "u32", "description": "Always EVENT_VERSION_V2"},
-          {"name": "program_id", "type": "String", "description": "Program the threshold applies to"},
-          {"name": "previous_threshold", "type": "i128", "description": "Previous threshold (i128::MAX = unlimited)"},
-          {"name": "new_threshold", "type": "i128", "description": "New threshold value"},
-          {"name": "set_by", "type": "Address", "description": "Admin that made the change"},
-          {"name": "timestamp", "type": "u64", "description": "Ledger timestamp"}
+          {
+            "name": "version",
+            "type": "u32",
+            "description": "Always EVENT_VERSION_V2"
+          },
+          {
+            "name": "program_id",
+            "type": "String",
+            "description": "Program the threshold applies to"
+          },
+          {
+            "name": "previous_threshold",
+            "type": "i128",
+            "description": "Previous threshold (i128::MAX = unlimited)"
+          },
+          {
+            "name": "new_threshold",
+            "type": "i128",
+            "description": "New threshold value"
+          },
+          {
+            "name": "set_by",
+            "type": "Address",
+            "description": "Admin that made the change"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64",
+            "description": "Ledger timestamp"
+          }
         ],
         "trigger": "Every successful set_program_spend_threshold call"
       },
       {
         "name": "SpendLimitExceededEvent",
         "description": "Audit event emitted when a payout is rejected for exceeding the spend threshold",
-        "topics": ["SpLimExc", "program_id"],
+        "topics": [
+          "SpLimExc",
+          "program_id"
+        ],
         "data": [
-          {"name": "version", "type": "u32", "description": "Always EVENT_VERSION_V2"},
-          {"name": "program_id", "type": "String", "description": "Program the threshold applies to"},
-          {"name": "requested_amount", "type": "i128", "description": "Amount that was requested and rejected"},
-          {"name": "threshold", "type": "i128", "description": "Configured threshold that was exceeded"},
-          {"name": "timestamp", "type": "u64", "description": "Ledger timestamp"}
+          {
+            "name": "version",
+            "type": "u32",
+            "description": "Always EVENT_VERSION_V2"
+          },
+          {
+            "name": "program_id",
+            "type": "String",
+            "description": "Program the threshold applies to"
+          },
+          {
+            "name": "requested_amount",
+            "type": "i128",
+            "description": "Amount that was requested and rejected"
+          },
+          {
+            "name": "threshold",
+            "type": "i128",
+            "description": "Configured threshold that was exceeded"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64",
+            "description": "Ledger timestamp"
+          }
         ],
         "trigger": "Every payout rejected due to spend threshold violation"
       },
       {
         "name": "SpendLimitSchemaVersionSet",
         "description": "Upgrade-safe marker recording the spend-limit storage schema version",
-        "topics": ["SpLimSch"],
+        "topics": [
+          "SpLimSch"
+        ],
         "data": [
-          {"name": "version", "type": "u32", "description": "Always EVENT_VERSION_V2"},
-          {"name": "schema_version", "type": "u32", "description": "Spend-limit schema version written to instance storage"},
-          {"name": "timestamp", "type": "u64", "description": "Ledger timestamp"}
+          {
+            "name": "version",
+            "type": "u32",
+            "description": "Always EVENT_VERSION_V2"
+          },
+          {
+            "name": "schema_version",
+            "type": "u32",
+            "description": "Spend-limit schema version written to instance storage"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64",
+            "description": "Ledger timestamp"
+          }
         ],
         "trigger": "Contract initialization (init_program)"
       }
@@ -1350,7 +1732,7 @@
       ]
     },
     "test_scenarios": [
-      "Complete program lifecycle (init → fund → payout)",
+      "Complete program lifecycle (init \u2192 fund \u2192 payout)",
       "Batch operations with mixed success/failure",
       "Circuit breaker activation and reset",
       "Dependency management with cycle detection",

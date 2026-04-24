@@ -164,7 +164,17 @@ pub enum ContractError {
     /// This error occurs when the caller has exceeded
     /// the allowed rate for operations.
     RateLimitExceeded = 18,
-    
+
+    /// Pagination limit is zero.
+    ///
+    /// This error occurs when a pagination query is called with `limit = 0`.
+    InvalidPaginationLimit = 19,
+
+    /// Pagination limit exceeds the configured maximum.
+    ///
+    /// This error occurs when `limit > HistoryPaginationConfig::max_limit`.
+    PaginationLimitExceedsMax = 20,
+
     // =========================================================================
     // Program Management Errors (100-199)
     // =========================================================================
@@ -607,28 +617,31 @@ pub enum ContractError {
     MaxRetriesExceeded = 1012,
 
     // =========================================================================
-    // Role Rotation Errors (1200-1299)
+    // Token Allowlist Errors (1100-1199)
     // =========================================================================
 
-    /// An admin rotation is already pending.
+    /// Token is not on the allowlist.
     ///
-    /// Cancel the existing proposal before proposing a new one.
-    AdminRotationPending = 1200,
+    /// This error occurs when a program initialization is attempted with a
+    /// token contract address that has not been added to the contract's
+    /// token allowlist. When the allowlist is non-empty, only explicitly
+    /// permitted tokens may be used.
+    ///
+    /// Resolution: ask the contract admin to add the token via
+    /// `add_allowed_token`, or use a token that is already on the list.
+    TokenNotAllowed = 1100,
 
-    /// No admin rotation is pending.
+    /// Token is already on the allowlist.
     ///
-    /// Call propose_admin before accept_admin or cancel_admin_rotation.
-    NoPendingAdminRotation = 1201,
+    /// This error occurs when attempting to add a token that is already
+    /// present in the allowlist.
+    TokenAlreadyAllowed = 1101,
 
-    /// A controller rotation is already pending for this program.
+    /// Token is not on the allowlist and cannot be removed.
     ///
-    /// Cancel the existing proposal before proposing a new one.
-    ControllerRotationPending = 1202,
-
-    /// No controller rotation is pending for this program.
-    ///
-    /// Call propose_controller before accept_controller or cancel_controller_rotation.
-    NoPendingControllerRotation = 1203,
+    /// This error occurs when attempting to remove a token that is not
+    /// present in the allowlist.
+    TokenNotInAllowlist = 1102,
 }
 
 impl ContractError {
@@ -662,6 +675,8 @@ impl ContractError {
             ContractError::EntryNotFound => "Entry not found",
             ContractError::InvalidConfig => "Invalid configuration",
             ContractError::RateLimitExceeded => "Rate limit exceeded",
+            ContractError::InvalidPaginationLimit => "Pagination limit must be greater than zero",
+            ContractError::PaginationLimitExceedsMax => "Pagination limit exceeds maximum",
             
             // Program Management Errors
             ContractError::ProgramInitFailed => "Program initialization failed",
@@ -750,11 +765,10 @@ impl ContractError {
             ContractError::BatchItemAlreadyProcessed => "Batch item already processed",
             ContractError::MaxRetriesExceeded => "Maximum retries exceeded",
 
-            // Role Rotation Errors
-            ContractError::AdminRotationPending => "Admin rotation already pending",
-            ContractError::NoPendingAdminRotation => "No pending admin rotation",
-            ContractError::ControllerRotationPending => "Controller rotation already pending",
-            ContractError::NoPendingControllerRotation => "No pending controller rotation",
+            // Token Allowlist Errors
+            ContractError::TokenNotAllowed => "Token is not on the allowlist",
+            ContractError::TokenAlreadyAllowed => "Token is already on the allowlist",
+            ContractError::TokenNotInAllowlist => "Token is not in the allowlist",
         }
     }
     
