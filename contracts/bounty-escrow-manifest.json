@@ -934,6 +934,26 @@
       }
     ]
   },
+  "view_entrypoints_fee_routing": [
+    {
+      "name": "get_fee_routing",
+      "description": "Return the per-bounty fee routing override for bounty_id, or None when no override is set.",
+      "parameters": [
+        {
+          "name": "bounty_id",
+          "type": "u64",
+          "description": "Bounty identifier"
+        }
+      ],
+      "returns": {
+        "type": "Option<PerBountyFeeRouting>",
+        "description": "Per-bounty routing config, or None if using global routing."
+      },
+      "authorization": "any",
+      "pausable": false,
+      "gas_estimate": "low"
+    }
+  ],
   "configuration": {
     "parameters": [
       {

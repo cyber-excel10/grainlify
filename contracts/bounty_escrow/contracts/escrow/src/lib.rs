@@ -979,6 +979,32 @@ pub struct BatchSizeCaps {
     pub release_cap: u32,
 }
 
+/// Per-bounty fee routing override.
+///
+/// When set for a specific `bounty_id`, the fee collected on lock and release
+/// for that bounty is split between a primary treasury and an optional partner
+/// instead of using the global `FeeConfig` routing.
+///
+/// # Invariant
+/// `treasury_bps + partner_bps == 10_000` (100 %) when `partner_recipient` is
+/// `Some`. When `partner_recipient` is `None`, `treasury_bps` must equal
+/// `10_000` and `partner_bps` must be `0`.
+///
+/// The fee *amount* is still computed from the global or per-token rate; this
+/// struct only controls *where* the collected fee is sent.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PerBountyFeeRouting {
+    /// Primary treasury recipient for this bounty's fees.
+    pub treasury_recipient: Address,
+    /// Treasury share in basis points (0–10 000).
+    pub treasury_bps: i128,
+    /// Optional partner / referral recipient.
+    pub partner_recipient: Option<Address>,
+    /// Partner share in basis points (0–10 000). Must be 0 when `partner_recipient` is `None`.
+    pub partner_bps: i128,
+}
+
 /// Per-token fee configuration.
 ///
 /// Allows different fee rates and recipients for each accepted token type.
@@ -1810,6 +1836,220 @@ impl BountyEscrowContract {
             fee_config.treasury_destinations,
             fee_config.distribution_enabled,
         )
+    }
+
+    // ── Per-bounty fee routing ────────────────────────────────────────────────
+
+    /// Set a per-bounty fee routing override (admin only).
+    ///
+    /// When set, fees collected for `bounty_id` are split between
+    /// `treasury_recipient` and an optional `partner_recipient` according to
+    /// the supplied basis-point shares instead of using the global routing.
+    ///
+    /// # Invariants enforced
+    /// - `treasury_bps + partner_bps == 10_000` (shares must sum to 100 %).
+    /// - `partner_bps == 0` when `partner_recipient` is `None`.
+    /// - Both shares must be in `[0, 10_000]`.
+    /// - The bounty must exist in persistent storage.
+    ///
+    /// # Errors
+    /// * `NotInitialized`  – contract not yet initialised.
+    /// * `BountyNotFound`  – `bounty_id` does not exist.
+    /// * `InvalidAmount`   – share invariant violated.
+    pub fn set_fee_routing(
+        env: Env,
+        bounty_id: u64,
+        treasury_recipient: Address,
+        treasury_bps: i128,
+        partner_recipient: Option<Address>,
+        partner_bps: i128,
+    ) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        // Bounty must exist (regular or anonymous).
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id))
+            && !env.storage().persistent().has(&DataKey::EscrowAnon(bounty_id))
+        {
+            return Err(Error::BountyNotFound);
+        }
+
+        // Validate share invariants.
+        if treasury_bps < 0 || treasury_bps > BASIS_POINTS {
+            return Err(Error::InvalidAmount);
+        }
+        if partner_bps < 0 || partner_bps > BASIS_POINTS {
+            return Err(Error::InvalidAmount);
+        }
+        match &partner_recipient {
+            None => {
+                // No partner: treasury must take 100 % and partner_bps must be 0.
+                if treasury_bps != BASIS_POINTS || partner_bps != 0 {
+                    return Err(Error::InvalidAmount);
+                }
+            }
+            Some(_) => {
+                // Partner present: shares must sum to exactly 100 %.
+                if treasury_bps.checked_add(partner_bps).unwrap_or(-1) != BASIS_POINTS {
+                    return Err(Error::InvalidAmount);
+                }
+            }
+        }
+
+        let routing = PerBountyFeeRouting {
+            treasury_recipient: treasury_recipient.clone(),
+            treasury_bps,
+            partner_recipient: partner_recipient.clone(),
+            partner_bps,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PerBountyFeeRouting(bounty_id), &routing);
+
+        events::emit_fee_routing_updated(
+            &env,
+            events::FeeRoutingUpdated {
+                version: EVENT_VERSION_V2,
+                bounty_id,
+                treasury_recipient,
+                treasury_bps,
+                partner_recipient,
+                partner_bps,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Return the per-bounty fee routing override for `bounty_id`, if one has been set.
+    ///
+    /// Returns `None` when no override exists; callers should fall back to the
+    /// global `FeeConfig` routing in that case.
+    pub fn get_fee_routing(env: Env, bounty_id: u64) -> Option<PerBountyFeeRouting> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PerBountyFeeRouting(bounty_id))
+    }
+
+    /// Internal: route a fee using per-bounty routing when available, falling back to
+    /// the global `route_fee` path.
+    ///
+    /// Emits [`events::FeeRouted`] when per-bounty routing is active so indexers can
+    /// reconstruct the exact split without inspecting storage.
+    fn route_fee_for_bounty(
+        env: &Env,
+        client: &token::Client,
+        config: &FeeConfig,
+        bounty_id: u64,
+        fee_amount: i128,
+        fee_rate: i128,
+        gross_amount: i128,
+        operation_type: events::FeeOperationType,
+    ) -> Result<(), Error> {
+        if fee_amount <= 0 {
+            return Ok(());
+        }
+
+        // Check for a per-bounty routing override.
+        let maybe_routing: Option<PerBountyFeeRouting> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PerBountyFeeRouting(bounty_id));
+
+        match maybe_routing {
+            None => {
+                // No per-bounty override — use the global route_fee path.
+                Self::route_fee(env, client, config, bounty_id, fee_amount, fee_rate, operation_type)
+            }
+            Some(routing) => {
+                // Per-bounty routing: split fee between treasury and optional partner.
+                // Invariant: treasury_share + partner_share == fee_amount (last leg absorbs remainder).
+                let treasury_share = if routing.partner_recipient.is_some() {
+                    fee_amount
+                        .checked_mul(routing.treasury_bps)
+                        .and_then(|v| v.checked_div(BASIS_POINTS))
+                        .ok_or(Error::InvalidAmount)?
+                } else {
+                    fee_amount
+                };
+
+                let partner_share = fee_amount
+                    .checked_sub(treasury_share)
+                    .ok_or(Error::InvalidAmount)?;
+
+                // Transfer treasury share.
+                if treasury_share > 0 {
+                    client.transfer(
+                        &env.current_contract_address(),
+                        &routing.treasury_recipient,
+                        &treasury_share,
+                    );
+                }
+
+                // Transfer partner share (if any).
+                if partner_share > 0 {
+                    if let Some(ref partner) = routing.partner_recipient {
+                        client.transfer(
+                            &env.current_contract_address(),
+                            partner,
+                            &partner_share,
+                        );
+                    }
+                }
+
+                // Verify invariant: distributed == fee_amount.
+                let distributed = treasury_share
+                    .checked_add(partner_share)
+                    .ok_or(Error::InvalidAmount)?;
+                let invariant_ok = distributed == fee_amount;
+
+                // Emit FeeRouted audit event.
+                events::emit_fee_routed(
+                    env,
+                    events::FeeRouted {
+                        version: EVENT_VERSION_V2,
+                        bounty_id,
+                        operation_type: operation_type.clone(),
+                        gross_amount,
+                        total_fee: fee_amount,
+                        fee_rate,
+                        treasury_recipient: routing.treasury_recipient.clone(),
+                        treasury_fee: treasury_share,
+                        partner_recipient: routing.partner_recipient.clone(),
+                        partner_fee: partner_share,
+                        timestamp: env.ledger().timestamp(),
+                    },
+                );
+
+                // Emit invariant-checked audit event.
+                events::emit_fee_routing_invariant_checked(
+                    env,
+                    events::FeeRoutingInvariantChecked {
+                        version: EVENT_VERSION_V2,
+                        bounty_id,
+                        operation_type,
+                        gross_amount,
+                        fee_amount,
+                        distributed_total: distributed,
+                        weight_total: BASIS_POINTS as u64,
+                        destination_count: if routing.partner_recipient.is_some() { 2 } else { 1 },
+                        invariant_ok,
+                        timestamp: env.ledger().timestamp(),
+                    },
+                );
+
+                if !invariant_ok {
+                    panic!("Fee routing invariant violated: distributed != fee_amount");
+                }
+
+                Ok(())
+            }
+        }
     }
 
     /// Updates the granular pause state and metadata for the contract.
@@ -3401,13 +3641,14 @@ impl BountyEscrowContract {
         // Transfer fee to recipient immediately (separate transfer so it is
         // visible as a distinct on-chain operation).
         if fee_amount > 0 {
-            if let Err(err) = Self::route_fee(
+            if let Err(err) = Self::route_fee_for_bounty(
                 &env,
                 &client,
                 &fee_config,
                 bounty_id,
                 fee_amount,
                 lock_fee_rate,
+                amount,
                 events::FeeOperationType::Lock,
             ) {
                 reentrancy_guard::release(&env);
@@ -3998,13 +4239,14 @@ impl BountyEscrowContract {
         let client = token::Client::new(&env, &token_addr);
 
         if release_fee > 0 {
-            Self::route_fee(
+            Self::route_fee_for_bounty(
                 &env,
                 &client,
                 &fee_config,
                 bounty_id,
                 release_fee,
                 release_fee_rate,
+                escrow.amount,
                 events::FeeOperationType::Release,
             )?;
         }
@@ -7345,13 +7587,14 @@ mod escrow_status_transition_tests {
         // Route fee
         if fee_amount > 0 {
             let fee_config = Self::get_fee_config_internal(&env);
-            Self::route_fee(
+            Self::route_fee_for_bounty(
                 &env,
                 &client,
                 &fee_config,
                 sub_bounty_id,
                 fee_amount,
                 lock_fee_rate,
+                amount,
                 events::FeeOperationType::Lock,
             )?;
         }
