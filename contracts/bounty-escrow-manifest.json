@@ -3,7 +3,7 @@
   "contract_name": "BountyEscrowContract",
   "contract_purpose": "Manages bounty escrow with multi-token support, capability-based authorization, two-step admin rotation with timelock, refund-eligibility views, fee configuration, and comprehensive security features including reentrancy protection and rate limiting",
   "version": {
-    "current": "2.1.1",
+    "current": "2.4.0",
     "schema": "1.0.0",
     "history": [
       {
@@ -54,6 +54,21 @@
           "Added InvalidBatchSizeCap error code for batch size governance",
           "Added BatchSizeCaps and FeeRoutingSchemaVersion DataKey variants for upgrade-safe storage",
           "Fee routing invariant is now enforced on-chain: last destination absorbs rounding remainder ensuring exact accounting"
+        ]
+      },
+      {
+        "version": "2.4.0",
+        "release_date": "2026-04-24",
+        "changes": [
+          "Added multi-governor risk flag governance: add_risk_governor / remove_risk_governor / get_risk_governors / is_risk_governor",
+          "Added set_escrow_risk_flags (OR bits, returns updated EscrowMetadata) and clear_escrow_risk_flags (AND-NOT bits)",
+          "Added update_metadata (admin or governor writes repo_id/issue_id/bounty_type/reference_hash, preserves risk_flags)",
+          "Added get_metadata view returning full EscrowMetadata with zero defaults when absent",
+          "Added get_risk_flag_schema_version view and RiskFlagSchemaVersion DataKey written on init",
+          "Added RISK_FLAG_MASK_ALL constant (bits 0-3); update_risk_flags and set_escrow_risk_flags now reject reserved bits",
+          "Added RiskGovernorAdded, RiskGovernorRemoved, RiskFlagSchemaVersionSet events for full audit trail",
+          "Added error codes 53-57: UnauthorizedRiskGovernor, InvalidRiskFlagBits, RiskGovernorLimitReached, RiskGovernorNotFound, RiskGovernorAlreadyRegistered",
+          "Governor list capped at MAX_RISK_GOVERNORS (16) to bound iteration cost"
         ]
       }
     ]
@@ -820,7 +835,7 @@
       },
       {
         "name": "update_risk_flags",
-        "description": "Updates the risk flags for a specific bounty",
+        "description": "Absolute-replace risk flags for a bounty (admin only); validates against RISK_FLAG_MASK_ALL",
         "parameters": [
           {
             "name": "bounty_id",
@@ -830,7 +845,7 @@
           {
             "name": "new_flags",
             "type": "u32",
-            "description": "New bitmask of risk flags"
+            "description": "New bitmask of risk flags (bits outside RISK_FLAG_MASK_ALL are rejected)"
           }
         ],
         "returns": {
@@ -838,6 +853,192 @@
           "description": "Empty on success"
         },
         "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "set_escrow_risk_flags",
+        "description": "OR flag_bits onto stored risk flags for a bounty (admin only). Returns updated EscrowMetadata.",
+        "parameters": [
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier (metadata created with zero defaults if absent)"
+          },
+          {
+            "name": "flag_bits",
+            "type": "u32",
+            "description": "Bits to set; rejected if outside RISK_FLAG_MASK_ALL"
+          }
+        ],
+        "returns": {
+          "type": "EscrowMetadata",
+          "description": "Updated metadata reflecting new flag state"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "clear_escrow_risk_flags",
+        "description": "AND-NOT flag_bits from stored risk flags for a bounty (admin only). Returns updated EscrowMetadata.",
+        "parameters": [
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          },
+          {
+            "name": "flag_bits",
+            "type": "u32",
+            "description": "Bits to clear; rejected if outside RISK_FLAG_MASK_ALL"
+          }
+        ],
+        "returns": {
+          "type": "EscrowMetadata",
+          "description": "Updated metadata reflecting new flag state"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "update_metadata",
+        "description": "Write repo_id, issue_id, bounty_type, and reference_hash for a bounty. Caller must be admin or a registered governor. Preserves risk_flags and notification_prefs.",
+        "parameters": [
+          {
+            "name": "caller",
+            "type": "Address",
+            "description": "Address performing the update; must be admin or governor"
+          },
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          },
+          {
+            "name": "repo_id",
+            "type": "u64",
+            "description": "Repository identifier"
+          },
+          {
+            "name": "issue_id",
+            "type": "u64",
+            "description": "Issue identifier"
+          },
+          {
+            "name": "bounty_type",
+            "type": "String",
+            "description": "Bounty type tag (max 50 chars)"
+          },
+          {
+            "name": "reference_hash",
+            "type": "Option<Bytes>",
+            "description": "Optional content-addressed reference hash",
+            "optional": true
+          }
+        ],
+        "returns": {
+          "type": "()",
+          "description": "Empty on success"
+        },
+        "authorization": "admin-or-governor",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_metadata",
+        "description": "Returns full EscrowMetadata for a bounty; zeroed defaults when absent",
+        "parameters": [
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          }
+        ],
+        "returns": {
+          "type": "EscrowMetadata",
+          "description": "Full metadata record"
+        },
+        "authorization": "none",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "add_risk_governor",
+        "description": "Adds an address to the risk-flag governor list (admin only, max 16 entries)",
+        "parameters": [
+          {
+            "name": "governor",
+            "type": "Address",
+            "description": "Address to authorize for risk-flag mutations"
+          }
+        ],
+        "returns": {
+          "type": "()",
+          "description": "Empty on success"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "remove_risk_governor",
+        "description": "Removes an address from the risk-flag governor list (admin only)",
+        "parameters": [
+          {
+            "name": "governor",
+            "type": "Address",
+            "description": "Address to deauthorize"
+          }
+        ],
+        "returns": {
+          "type": "()",
+          "description": "Empty on success"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_risk_governors",
+        "description": "Returns the current list of risk-flag governors",
+        "parameters": [],
+        "returns": {
+          "type": "Vec<Address>",
+          "description": "Registered governor addresses (empty if none)"
+        },
+        "authorization": "none",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "is_risk_governor",
+        "description": "Returns true if addr is in the risk-flag governor list",
+        "parameters": [
+          {
+            "name": "addr",
+            "type": "Address",
+            "description": "Address to check"
+          }
+        ],
+        "returns": {
+          "type": "bool",
+          "description": "Whether addr is a registered governor"
+        },
+        "authorization": "none",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_risk_flag_schema_version",
+        "description": "Returns the risk-flag storage schema version written during init",
+        "parameters": [],
+        "returns": {
+          "type": "Option<u32>",
+          "description": "Schema version, or None if contract not yet initialized"
+        },
+        "authorization": "none",
         "pausable": false,
         "gas_estimate": "low"
       },

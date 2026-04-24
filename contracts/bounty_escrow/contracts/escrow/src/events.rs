@@ -1767,3 +1767,80 @@ pub fn emit_fee_routing_schema_version_set(env: &Env, event: FeeRoutingSchemaVer
     let topics = (symbol_short!("fee_schm"),);
     env.events().publish(topics, event);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RISK FLAG GOVERNANCE EVENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Emitted when an admin adds an address to the risk-flag governor list.
+///
+/// ### Topics
+/// | Index | Value |
+/// |-------|-------|
+/// | 0 | `"rg_add"` |
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RiskGovernorAdded {
+    pub version: u32,
+    /// Address granted risk-flag mutation authority.
+    pub governor: Address,
+    /// Admin who added the governor.
+    pub added_by: Address,
+    pub timestamp: u64,
+}
+
+/// Emit [`RiskGovernorAdded`].
+pub fn emit_risk_governor_added(env: &Env, event: RiskGovernorAdded) {
+    let topics = (symbol_short!("rg_add"),);
+    env.events().publish(topics, event);
+}
+
+/// Emitted when an admin removes an address from the risk-flag governor list.
+///
+/// ### Topics
+/// | Index | Value |
+/// |-------|-------|
+/// | 0 | `"rg_rm"` |
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RiskGovernorRemoved {
+    pub version: u32,
+    /// Address whose risk-flag authority was revoked.
+    pub governor: Address,
+    /// Admin who removed the governor.
+    pub removed_by: Address,
+    pub timestamp: u64,
+}
+
+/// Emit [`RiskGovernorRemoved`].
+pub fn emit_risk_governor_removed(env: &Env, event: RiskGovernorRemoved) {
+    let topics = (symbol_short!("rg_rm"),);
+    env.events().publish(topics, event);
+}
+
+/// Emitted once during `init()` to record the risk-flag storage schema version.
+///
+/// Mirrors the fee-routing schema version pattern: written to instance storage
+/// on initialization so upgrade safety checks can detect schema mismatches when
+/// the `EscrowMetadata` risk-flag layout changes.
+///
+/// ### Topics
+/// | Index | Value |
+/// |-------|-------|
+/// | 0 | `"rf_schm"` |
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RiskFlagSchemaVersionSet {
+    pub version: u32,
+    /// Risk-flag schema version written to instance storage.
+    pub schema_version: u32,
+    /// Admin that initialized the contract.
+    pub set_by: Address,
+    pub timestamp: u64,
+}
+
+/// Emit [`RiskFlagSchemaVersionSet`].
+pub fn emit_risk_flag_schema_version_set(env: &Env, event: RiskFlagSchemaVersionSet) {
+    let topics = (symbol_short!("rf_schm"),);
+    env.events().publish(topics, event);
+}
