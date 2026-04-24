@@ -24,6 +24,8 @@ mod traits;
 pub mod upgrade_safety;
 
 #[cfg(test)]
+mod test_filter_pagination;
+#[cfg(test)]
 mod test_frozen_balance;
 #[cfg(test)]
 mod test_reentrancy_guard;
@@ -33,12 +35,14 @@ use crate::events::{
     emit_deprecation_state_changed, emit_deterministic_selection, emit_funds_locked,
     emit_funds_locked_anon, emit_funds_refunded, emit_funds_released,
     emit_maintenance_mode_changed, emit_notification_preferences_updated,
-    emit_participant_filter_mode_changed, emit_refund_approval_consumed, emit_refund_approval_set,
+    emit_participant_filter_mode_changed, emit_participant_filter_queried,
+    emit_refund_approval_consumed, emit_refund_approval_set,
     emit_risk_flags_updated, emit_ticket_claimed, emit_ticket_issued, BatchFundsLocked,
     BatchFundsReleased, BountyEscrowInitialized, ClaimCancelled, ClaimCreated, ClaimExecuted,
     CriticalOperationOutcome, DeprecationStateChanged, DeterministicSelectionDerived, FundsLocked,
     FundsLockedAnon, FundsRefunded, FundsReleased, MaintenanceModeChanged, MaintenanceModeChangedV2,
-    NotificationPreferencesUpdated, ParticipantFilterModeChanged, RefundApprovalConsumed,
+    NotificationPreferencesUpdated, ParticipantFilterModeChanged, ParticipantFilterQueried,
+    RefundApprovalConsumed,
     RefundApprovalSet, RefundTriggerType, RiskFlagsUpdated, TicketClaimed, TicketIssued,
     EVENT_VERSION_V2,
     emit_claim_window_set, emit_claim_window_validated, emit_claim_window_expired,
@@ -703,6 +707,19 @@ pub enum ParticipantFilterMode {
     AllowlistOnly = 2,
 }
 
+/// Paginated result from `query_whitelist` / `query_blocklist`.
+///
+/// `has_more` is `true` when the underlying list extends beyond `offset + items.len()`,
+/// letting callers detect the end of the list without a separate count query.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantListPage {
+    pub items: Vec<Address>,
+    pub total: u32,
+    pub offset: u32,
+    pub has_more: bool,
+}
+
 /// Kill-switch state: when deprecated is true, new escrows are blocked; existing escrows can complete or migrate.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -864,6 +881,9 @@ pub enum DataKey {
     FeeRoutingSchemaVersion,
     /// Runtime-configurable batch size caps for lock and release operations.
     BatchSizeCaps,
+    /// Upgrade-safe marker for participant list storage semantics.
+    /// Increment when `WhitelistIndex` / `BlocklistIndex` layout changes.
+    ParticipantListSchemaVersion,
 }
 
 #[contracttype]
@@ -1002,6 +1022,12 @@ pub struct ReleaseApproval {
 
 const REFUND_ELIGIBILITY_SCHEMA_VERSION_V1: u32 = 1;
 const MAINTENANCE_MODE_SCHEMA_VERSION_V1: u32 = 1;
+const PARTICIPANT_LIST_SCHEMA_VERSION_V1: u32 = 1;
+
+/// Hard upper bound on the number of addresses returned per `query_whitelist` /
+/// `query_blocklist` call. Callers that pass a larger `limit` are silently capped
+/// to this value, keeping individual ledger operations bounded.
+const MAX_PARTICIPANT_FILTER_PAGE_SIZE: u32 = 50;
 
 /// Current fee routing storage schema version.
 ///
@@ -1248,6 +1274,10 @@ impl BountyEscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::MaintenanceModeUpdatedBy, &admin);
+        env.storage().instance().set(
+            &DataKey::ParticipantListSchemaVersion,
+            &PARTICIPANT_LIST_SCHEMA_VERSION_V1,
+        );
 
         events::emit_bounty_initialized(
             &env,
@@ -2501,16 +2531,74 @@ impl BountyEscrowContract {
         Self::get_participant_filter_mode(&env)
     }
 
-    /// Return a deterministic page of allowlisted addresses.
-    pub fn query_whitelist(env: Env, offset: u32, limit: u32) -> Vec<Address> {
-        let values = Self::read_participant_index(&env, DataKey::WhitelistIndex);
-        Self::paginate_addresses(&env, values, offset, limit)
+    /// Return the total number of allowlisted addresses.
+    pub fn get_whitelist_count(env: Env) -> u32 {
+        Self::read_participant_index(&env, DataKey::WhitelistIndex).len()
     }
 
-    /// Return a deterministic page of blocklisted addresses.
-    pub fn query_blocklist(env: Env, offset: u32, limit: u32) -> Vec<Address> {
+    /// Return the total number of blocklisted addresses.
+    pub fn get_blocklist_count(env: Env) -> u32 {
+        Self::read_participant_index(&env, DataKey::BlocklistIndex).len()
+    }
+
+    /// Return a deterministic page of allowlisted addresses with pagination metadata.
+    ///
+    /// `limit` is silently capped at `MAX_PARTICIPANT_FILTER_PAGE_SIZE` (50).
+    /// Emits a `ParticipantFilterQueried` audit event on every call.
+    pub fn query_whitelist(env: Env, offset: u32, limit: u32) -> ParticipantListPage {
+        let effective_limit = limit.min(MAX_PARTICIPANT_FILTER_PAGE_SIZE);
+        let values = Self::read_participant_index(&env, DataKey::WhitelistIndex);
+        let total = values.len();
+        let items = Self::paginate_addresses(&env, values, offset, effective_limit);
+        let result_count = items.len();
+        let has_more = (offset + result_count) < total;
+        emit_participant_filter_queried(
+            &env,
+            ParticipantFilterQueried {
+                list_type: events::ParticipantFilterListType::Allowlist,
+                offset,
+                limit: effective_limit,
+                result_count,
+                total,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+        ParticipantListPage {
+            items,
+            total,
+            offset,
+            has_more,
+        }
+    }
+
+    /// Return a deterministic page of blocklisted addresses with pagination metadata.
+    ///
+    /// `limit` is silently capped at `MAX_PARTICIPANT_FILTER_PAGE_SIZE` (50).
+    /// Emits a `ParticipantFilterQueried` audit event on every call.
+    pub fn query_blocklist(env: Env, offset: u32, limit: u32) -> ParticipantListPage {
+        let effective_limit = limit.min(MAX_PARTICIPANT_FILTER_PAGE_SIZE);
         let values = Self::read_participant_index(&env, DataKey::BlocklistIndex);
-        Self::paginate_addresses(&env, values, offset, limit)
+        let total = values.len();
+        let items = Self::paginate_addresses(&env, values, offset, effective_limit);
+        let result_count = items.len();
+        let has_more = (offset + result_count) < total;
+        emit_participant_filter_queried(
+            &env,
+            ParticipantFilterQueried {
+                list_type: events::ParticipantFilterListType::Blocklist,
+                offset,
+                limit: effective_limit,
+                result_count,
+                total,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+        ParticipantListPage {
+            items,
+            total,
+            offset,
+            has_more,
+        }
     }
 
     fn next_capability_id(env: &Env) -> BytesN<32> {

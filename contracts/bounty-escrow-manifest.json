@@ -1,9 +1,9 @@
 {
   "$schema": "./contract-manifest-schema.json",
   "contract_name": "BountyEscrowContract",
-  "contract_purpose": "Manages bounty escrow with multi-token support, capability-based authorization, two-step admin rotation with timelock, refund-eligibility views, fee configuration, and comprehensive security features including reentrancy protection and rate limiting",
+  "contract_purpose": "Manages bounty escrow with multi-token support, capability-based authorization, two-step admin rotation with timelock, refund-eligibility views, fee configuration, participant filter pagination with audit events, and comprehensive security features including reentrancy protection and rate limiting",
   "version": {
-    "current": "2.1.1",
+    "current": "2.4.0",
     "schema": "1.0.0",
     "history": [
       {
@@ -54,6 +54,17 @@
           "Added InvalidBatchSizeCap error code for batch size governance",
           "Added BatchSizeCaps and FeeRoutingSchemaVersion DataKey variants for upgrade-safe storage",
           "Fee routing invariant is now enforced on-chain: last destination absorbs rounding remainder ensuring exact accounting"
+        ]
+      },
+      {
+        "version": "2.4.0",
+        "release_date": "2026-04-23",
+        "changes": [
+          "query_whitelist and query_blocklist now return ParticipantListPage with items, total, offset, and has_more fields for clear pagination semantics",
+          "Added get_whitelist_count and get_blocklist_count view functions for O(1) total-count queries",
+          "Added ParticipantFilterQueried audit event emitted on every query_whitelist/query_blocklist call for off-chain audit trails",
+          "Limit argument silently capped at MAX_PARTICIPANT_FILTER_PAGE_SIZE (50) to bound per-call ledger cost",
+          "Added ParticipantListSchemaVersion storage key initialized on contract init for upgrade-safe storage versioning"
         ]
       }
     ]
@@ -346,8 +357,32 @@
         "gas_estimate": "low"
       },
       {
+        "name": "get_whitelist_count",
+        "description": "Return total number of allowlisted addresses",
+        "parameters": [],
+        "returns": {
+          "type": "u32",
+          "description": "Total count of allowlisted addresses"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_blocklist_count",
+        "description": "Return total number of blocklisted addresses",
+        "parameters": [],
+        "returns": {
+          "type": "u32",
+          "description": "Total count of blocklisted addresses"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
         "name": "query_whitelist",
-        "description": "Get paginated allowlist participants",
+        "description": "Get paginated allowlist participants with total count and has_more metadata. Limit silently capped at 50.",
         "parameters": [
           {
             "name": "offset",
@@ -357,12 +392,12 @@
           {
             "name": "limit",
             "type": "u32",
-            "description": "Maximum number of results"
+            "description": "Maximum number of results (capped at 50)"
           }
         ],
         "returns": {
-          "type": "Vec<Address>",
-          "description": "Allowlisted participant addresses"
+          "type": "ParticipantListPage",
+          "description": "Page of allowlisted addresses with items, total, offset, and has_more fields"
         },
         "authorization": "any",
         "pausable": false,
@@ -370,7 +405,7 @@
       },
       {
         "name": "query_blocklist",
-        "description": "Get paginated blocklist participants",
+        "description": "Get paginated blocklist participants with total count and has_more metadata. Limit silently capped at 50.",
         "parameters": [
           {
             "name": "offset",
@@ -380,12 +415,12 @@
           {
             "name": "limit",
             "type": "u32",
-            "description": "Maximum number of results"
+            "description": "Maximum number of results (capped at 50)"
           }
         ],
         "returns": {
-          "type": "Vec<Address>",
-          "description": "Blocklisted participant addresses"
+          "type": "ParticipantListPage",
+          "description": "Page of blocklisted addresses with items, total, offset, and has_more fields"
         },
         "authorization": "any",
         "pausable": false,
@@ -951,6 +986,14 @@
         "description": "Delay in seconds before a pending admin can accept a rotation",
         "constraints": "3600 <= value <= 2592000",
         "admin_only": true
+      },
+      {
+        "name": "MAX_PARTICIPANT_FILTER_PAGE_SIZE",
+        "type": "u32",
+        "default_value": "50",
+        "description": "Hard upper bound on addresses returned per query_whitelist / query_blocklist call. Callers passing a larger limit are silently capped.",
+        "constraints": "value = 50",
+        "admin_only": false
       }
     ],
     "storage_keys": [
@@ -1049,6 +1092,12 @@
         "type": "instance",
         "description": "Paginated index of blocklisted addresses",
         "data_structure": "Vec<Address>"
+      },
+      {
+        "name": "ParticipantListSchemaVersion",
+        "type": "instance",
+        "description": "Upgrade-safe marker for participant list (whitelist/blocklist) storage semantics. Initialized to 1 during init().",
+        "data_structure": "u32"
       }
     ]
   },
@@ -1441,6 +1490,43 @@
           }
         ],
         "trigger": "Admin toggles maintenance mode (state change only)"
+      },
+      {
+        "name": "ParticipantFilterQueried",
+        "description": "Emitted on every query_whitelist / query_blocklist call for off-chain audit trails",
+        "data": [
+          {
+            "name": "list_type",
+            "type": "ParticipantFilterListType",
+            "description": "Which list was queried (Allowlist or Blocklist)"
+          },
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Zero-based start index used in this query"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Effective limit after applying MAX_PARTICIPANT_FILTER_PAGE_SIZE cap"
+          },
+          {
+            "name": "result_count",
+            "type": "u32",
+            "description": "Number of addresses returned in this page"
+          },
+          {
+            "name": "total",
+            "type": "u32",
+            "description": "Total number of addresses in the list at query time"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64",
+            "description": "Ledger timestamp"
+          }
+        ],
+        "trigger": "Every call to query_whitelist or query_blocklist"
       }
     ]
   },
@@ -1582,7 +1668,8 @@
         "test_metadata_tagging.rs",
         "test_partial_payout_rounding.rs",
         "test_gas.rs",
-        "test_analytics_monitoring.rs"
+        "test_analytics_monitoring.rs",
+        "test_filter_pagination.rs"
       ]
     },
     "test_scenarios": [

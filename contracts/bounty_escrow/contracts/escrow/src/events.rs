@@ -956,6 +956,30 @@ pub fn emit_participant_filter_entry_updated(env: &Env, event: ParticipantFilter
     env.events().publish(topics, event);
 }
 
+/// Payload emitted after every `query_whitelist` / `query_blocklist` call for
+/// off-chain audit trails.
+///
+/// ### Topics
+/// | Index | Value |
+/// |-------|-------|
+/// | 0 | `"pf_query"` |
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantFilterQueried {
+    pub list_type: ParticipantFilterListType,
+    pub offset: u32,
+    pub limit: u32,
+    pub result_count: u32,
+    pub total: u32,
+    pub timestamp: u64,
+}
+
+/// Emit [`ParticipantFilterQueried`]
+pub fn emit_participant_filter_queried(env: &Env, event: ParticipantFilterQueried) {
+    let topics = (symbol_short!("pf_query"),);
+    env.events().publish(topics, event);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // RISK FLAG EVENTS
 // ═══════════════════════════════════════════════════════════════════════════════
