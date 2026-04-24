@@ -18,13 +18,14 @@
 // - Prevents double-initialization via AlreadyInitialized error
 
 extern crate std;
+use std::vec::Vec;
 
 use soroban_sdk::{
     testutils::{Address as _, Events},
-    Address, Env, IntoVal,
+    Address, Env, IntoVal, Symbol, TryIntoVal,
 };
 
-use crate::{BuildInfoEvent, ContractError, GrainlifyContract, GrainlifyContractClient, VERSION};
+use crate::{BuildInfoEvent, GrainlifyContract, GrainlifyContractClient, VERSION};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -73,7 +74,7 @@ fn test_build_info_event_admin_field() {
 
     // Verify no panic and contract is initialized
     let stored_admin = client.get_admin();
-    assert_eq!(stored_admin, admin, "Admin should be stored correctly");
+    assert_eq!(stored_admin, Some(admin), "Admin should be stored correctly");
 }
 
 /// BuildInfo event contains correct version
@@ -177,10 +178,11 @@ fn test_build_info_event_requires_admin_auth() {
     let build_info_events: Vec<_> = events
         .iter()
         .filter(|event| {
-            let topics = &event.topics;
-            topics.len() == 2
-                && topics.get(0).unwrap().to_val().to_bytes(&env).unwrap()
-                    == soroban_sdk::symbol_short!("init").to_val().to_bytes(&env).unwrap()
+            let topics = &event.1;
+            topics.len() >= 1 && {
+                let t0: Option<Symbol> = topics.get(0).and_then(|v| v.try_into_val(&env).ok());
+                t0 == Some(soroban_sdk::symbol_short!("init"))
+            }
         })
         .collect();
 
@@ -203,7 +205,7 @@ fn test_build_info_event_requires_init() {
     client.init_admin(&admin);
     let stored_admin = client.get_admin();
     
-    assert_eq!(stored_admin, admin, "Admin should be properly initialized");
+    assert_eq!(stored_admin, Some(admin), "Admin should be properly initialized");
 }
 
 // ── tests: Edge cases and boundary conditions ────────────────────────────────
@@ -215,7 +217,7 @@ fn test_build_info_event_with_different_admins() {
     env.mock_all_auths();
 
     // Test with multiple different admin addresses
-    let admins = vec![
+    let admins = std::vec![
         Address::generate(&env),
         Address::generate(&env),
         Address::generate(&env),
@@ -231,16 +233,16 @@ fn test_build_info_event_with_different_admins() {
         let build_info_events: Vec<_> = events
             .iter()
             .filter(|event| {
-                let topics = &event.topics;
-                topics.len() == 2
-                    && topics.get(0).unwrap().to_val().to_bytes(&env).unwrap()
-                        == soroban_sdk::symbol_short!("init").to_val().to_bytes(&env).unwrap()
+                let topics = &event.1;
+                topics.len() >= 1 && {
+                    let t0: Option<Symbol> = topics.get(0).and_then(|v| v.try_into_val(&env).ok());
+                    t0 == Some(soroban_sdk::symbol_short!("init"))
+                }
             })
             .collect();
 
         assert!(!build_info_events.is_empty());
-        let event_data: BuildInfoEvent =
-            build_info_events[0].data.unwrap().into_val(&env).unwrap();
+        let event_data: BuildInfoEvent = build_info_events[0].2.try_into_val(&env).unwrap();
         assert_eq!(event_data.admin, admin);
     }
 }
@@ -307,7 +309,7 @@ fn test_build_info_event_per_contract_instance() {
     let stored_admin1 = client1.get_admin();
     let stored_admin2 = client2.get_admin();
 
-    assert_eq!(stored_admin1, admin1);
-    assert_eq!(stored_admin2, admin2);
+    assert_eq!(stored_admin1, Some(admin1));
+    assert_eq!(stored_admin2, Some(admin2));
     assert_ne!(stored_admin1, stored_admin2);
 }
