@@ -385,6 +385,31 @@ mod anti_abuse {
         env.storage().instance().set(&AntiAbuseKey::Admin, &admin);
     }
 
+    fn get_admin(e: &Env) -> Address {
+    e.storage().instance().get(&DataKey::Admin).unwrap()
+}
+
+fn set_admin(e: &Env, admin: &Address) {
+    e.storage().instance().set(&DataKey::Admin, admin);
+}
+
+fn get_pending_admin(e: &Env) -> Option<Address> {
+    e.storage().instance().get(&DataKey::PendingAdmin)
+}
+
+fn set_pending_admin(e: &Env, admin: &Address) {
+    e.storage().instance().set(&DataKey::PendingAdmin, admin);
+}
+
+fn set_admin_transfer_time(e: &Env, ts: u64) {
+    e.storage().instance().set(&DataKey::AdminTransferTimestamp, &ts);
+}
+
+fn get_admin_transfer_time(e: &Env) -> Option<u64> {
+    e.storage().instance().get(&DataKey::AdminTransferTimestamp)
+}
+
+
     pub fn check_rate_limit(env: &Env, address: Address) {
         if is_whitelisted(env, address.clone()) {
             return;
@@ -1059,6 +1084,8 @@ const PARTICIPANT_LIST_SCHEMA_VERSION_V1: u32 = 1;
 /// to this value, keeping individual ledger operations bounded.
 const MAX_PARTICIPANT_FILTER_PAGE_SIZE: u32 = 50;
 
+const ADMIN_TIMELOCK: u64 = 60 * 60 * 24; // 24 hours
+
 /// Current fee routing storage schema version.
 ///
 /// Increment this constant whenever the `FeeConfig` or `TreasuryDestination`
@@ -1229,6 +1256,47 @@ impl BountyEscrowContract {
 
     pub fn get_state_snapshot(env: Env) -> monitoring::StateSnapshot {
         monitoring::get_state_snapshot(&env)
+    }
+
+    pub fn propose_admin(env: Env, new_admin: Address) {
+    let admin = get_admin(&env);
+    admin.require_auth();
+
+    set_pending_admin(&env, &new_admin);
+    set_admin_transfer_time(&env, env.ledger().timestamp());
+
+    events::emit_admin_proposed(&env, admin, new_admin);
+    }
+
+    pub fn accept_admin(env: Env) {
+    let pending = get_pending_admin(&env).unwrap();
+    pending.require_auth();
+
+    let start = get_admin_transfer_time(&env).unwrap();
+    let now = env.ledger().timestamp();
+
+    if now < start + ADMIN_TIMELOCK {
+        panic!("Timelock not expired");
+    }
+
+    let old_admin = get_admin(&env);
+
+    set_admin(&env, &pending);
+
+    env.storage().instance().remove(&DataKey::PendingAdmin);
+    env.storage().instance().remove(&DataKey::AdminTransferTimestamp);
+
+    events::emit_admin_transferred(&env, old_admin, pending);
+    }
+
+    pub fn cancel_admin_transfer(env: Env) {
+    let admin = get_admin(&env);
+    admin.require_auth();
+
+    env.storage().instance().remove(&DataKey::PendingAdmin);
+    env.storage().instance().remove(&DataKey::AdminTransferTimestamp);
+
+    events::emit_admin_transfer_cancelled(&env, admin);
     }
 
     fn order_batch_lock_items(env: &Env, items: &Vec<LockFundsItem>) -> Vec<LockFundsItem> {

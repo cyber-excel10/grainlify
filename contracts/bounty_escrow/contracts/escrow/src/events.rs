@@ -92,6 +92,27 @@ pub fn emit_bounty_initialized(env: &Env, event: BountyEscrowInitialized) {
     env.events().publish(topics, event.clone());
 }
 
+pub fn emit_admin_proposed(e: &Env, old: Address, new: Address) {
+    e.events().publish(
+        (symbol_short!("admin_prop"),),
+        (old, new),
+    );
+}
+
+pub fn emit_admin_transferred(e: &Env, old: Address, new: Address) {
+    e.events().publish(
+        (symbol_short!("admin_tx"),),
+        (old, new),
+    );
+}
+
+pub fn emit_admin_transfer_cancelled(e: &Env, admin: Address) {
+    e.events().publish(
+        (symbol_short!("admin_cancel"),),
+        (admin,),
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADMIN ROTATION EVENTS
 // ═══════════════════════════════════════════════════════════════════════════════
