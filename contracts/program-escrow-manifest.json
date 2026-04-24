@@ -72,7 +72,11 @@
           "Pause checks remain deterministic: release_paused blocks single_payout and batch_payout; lock_paused blocks lock_program_funds; flags are orthogonal",
           "Added 16 targeted tests in test.rs covering pause invariants, V2 event fields, schema version, and edge cases"
         ]
-      }
+      },
+      {
+        "version": "2.4.1",
+        "release_date": "2026-04-23",
+        "changes": [
           "Deterministic error ordering preserved: threshold check runs before balance and circuit-breaker checks"
         ]
       }
