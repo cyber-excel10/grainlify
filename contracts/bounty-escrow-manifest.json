@@ -3,7 +3,7 @@
   "contract_name": "BountyEscrowContract",
   "contract_purpose": "Manages bounty escrow with multi-token support, capability-based authorization, fee configuration, and comprehensive security features including reentrancy protection and rate limiting",
   "version": {
-    "current": "2.0.0",
+    "current": "2.4.0",
     "schema": "1.0.0",
     "history": [
       {
@@ -34,6 +34,20 @@
           "Added explicit refund eligibility view with deterministic semantics",
           "Added refund approval audit events for approval set/consumption lifecycle",
           "Added upgrade-safe storage marker for refund eligibility schema versioning"
+        ]
+      },
+      {
+        "version": "2.4.0",
+        "release_date": "2026-04-23",
+        "changes": [
+          "Added set_escrow_risk_flags: OR-in risk bits with reserved-bit validation and RiskFlagsUpdated audit event",
+          "Added clear_escrow_risk_flags: AND-NOT risk bits with reserved-bit validation and RiskFlagsUpdated audit event",
+          "Added get_metadata view entrypoint returning EscrowMetadata (default zero when unset)",
+          "Added update_metadata admin entrypoint preserving existing risk flags",
+          "Added get_risk_flags_schema_version view entrypoint for upgrade safety",
+          "Added RiskFlagsSchemaVersion upgrade-safe storage key written on init",
+          "Added RISK_FLAGS_VALID_MASK constant for reserved-bit enforcement",
+          "Added InvalidRiskFlags error (code 47) for reserved-bit violations"
         ]
       }
     ]
@@ -682,6 +696,65 @@
         "authorization": "admin",
         "pausable": false,
         "gas_estimate": "high"
+      },
+      {
+        "name": "set_escrow_risk_flags",
+        "description": "OR-in risk flag bits on a bounty's metadata (admin only). Rejects reserved bits outside RISK_FLAGS_VALID_MASK. Emits RiskFlagsUpdated.",
+        "parameters": [
+          {"name": "bounty_id", "type": "u64", "description": "Bounty identifier"},
+          {"name": "flags", "type": "u32", "description": "Risk flag bits to set (must be within RISK_FLAGS_VALID_MASK)"}
+        ],
+        "returns": {"type": "EscrowMetadata", "description": "Updated metadata"},
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "clear_escrow_risk_flags",
+        "description": "AND-NOT risk flag bits from a bounty's metadata (admin only). Idempotent. Rejects reserved bits. Emits RiskFlagsUpdated.",
+        "parameters": [
+          {"name": "bounty_id", "type": "u64", "description": "Bounty identifier"},
+          {"name": "flags", "type": "u32", "description": "Risk flag bits to clear (must be within RISK_FLAGS_VALID_MASK)"}
+        ],
+        "returns": {"type": "EscrowMetadata", "description": "Updated metadata"},
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_metadata",
+        "description": "Return the EscrowMetadata for a bounty. Returns default (all-zero) when no metadata exists.",
+        "parameters": [
+          {"name": "bounty_id", "type": "u64", "description": "Bounty identifier"}
+        ],
+        "returns": {"type": "EscrowMetadata", "description": "Escrow metadata"},
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "update_metadata",
+        "description": "Update metadata fields for a bounty (admin only). Preserves existing risk_flags.",
+        "parameters": [
+          {"name": "bounty_id", "type": "u64", "description": "Bounty identifier"},
+          {"name": "repo_id", "type": "u64", "description": "Repository identifier"},
+          {"name": "issue_id", "type": "u64", "description": "Issue identifier"},
+          {"name": "bounty_type", "type": "String", "description": "Bounty type label"},
+          {"name": "reference_hash", "type": "Option<Bytes>", "description": "Optional reference hash", "optional": true}
+        ],
+        "returns": {"type": "EscrowMetadata", "description": "Updated metadata"},
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_risk_flags_schema_version",
+        "description": "Return the risk-flags governance storage schema version written during init. Returns 0 on legacy deployments.",
+        "parameters": [],
+        "returns": {"type": "u32", "description": "Schema version (1 = current; 0 = legacy pre-v2.4)"},
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
       }
     ]
   },
@@ -788,6 +861,12 @@
         "name": "RefundEligibilitySchemaVersion",
         "type": "instance",
         "description": "Version marker for refund eligibility view semantics",
+        "data_structure": "u32"
+      },
+      {
+        "name": "RiskFlagsSchemaVersion",
+        "type": "instance",
+        "description": "Upgrade-safe version marker for risk-flags governance storage layout. Increment when EscrowMetadata risk_flags layout changes.",
         "data_structure": "u32"
       },
       {
@@ -1066,6 +1145,20 @@
           }
         ],
         "trigger": "Successful refund call with admin approval record"
+      },
+      {
+        "name": "RiskFlagsUpdated",
+        "description": "Audit event emitted after every set_escrow_risk_flags or clear_escrow_risk_flags call",
+        "topics": ["risk", "bounty_id"],
+        "data": [
+          {"name": "version", "type": "u32", "description": "Always EVENT_VERSION_V2"},
+          {"name": "bounty_id", "type": "u64", "description": "Bounty the flags apply to"},
+          {"name": "previous_flags", "type": "u32", "description": "Flags before the update"},
+          {"name": "new_flags", "type": "u32", "description": "Flags after the update"},
+          {"name": "admin", "type": "Address", "description": "Admin that made the change"},
+          {"name": "timestamp", "type": "u64", "description": "Ledger timestamp"}
+        ],
+        "trigger": "Every successful set_escrow_risk_flags or clear_escrow_risk_flags call"
       }
     ]
   },

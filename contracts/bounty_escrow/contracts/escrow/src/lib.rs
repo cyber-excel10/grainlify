@@ -617,6 +617,8 @@ pub enum Error {
     EscrowFrozen = 45,
     /// Returned when the escrow depositor is explicitly frozen by an admin hold.
     AddressFrozen = 46,
+    /// Returned when risk flags contain reserved bits outside the valid mask.
+    InvalidRiskFlags = 47,
 }
 
 /// Bit flag: escrow or payout should be treated as elevated risk (indexers, UIs).
@@ -832,6 +834,9 @@ pub enum DataKey {
     CycleLink(u64),
     /// Stored schema marker for refund-eligibility view semantics.
     RefundEligibilitySchemaVersion,
+    /// Stored schema marker for risk-flags governance storage layout versioning.
+    /// Increment when the `EscrowMetadata::risk_flags` layout changes.
+    RiskFlagsSchemaVersion,
 }
 
 #[contracttype]
@@ -960,6 +965,18 @@ pub struct ReleaseApproval {
 }
 
 const REFUND_ELIGIBILITY_SCHEMA_VERSION_V1: u32 = 1;
+
+/// Current risk-flags governance storage schema version.
+///
+/// Increment whenever the `EscrowMetadata::risk_flags` layout changes in a
+/// breaking way. Written to instance storage during `init` so upgrade safety
+/// checks can detect schema mismatches on legacy deployments.
+const RISK_FLAGS_SCHEMA_VERSION_V1: u32 = 1;
+
+/// Bitmask of all valid public risk flag bits.
+/// Any bits outside this mask are reserved and must be zero.
+pub const RISK_FLAGS_VALID_MASK: u32 =
+    RISK_FLAG_HIGH_RISK | RISK_FLAG_UNDER_REVIEW | RISK_FLAG_RESTRICTED | RISK_FLAG_DEPRECATED;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1183,6 +1200,11 @@ impl BountyEscrowContract {
         env.storage().instance().set(
             &DataKey::RefundEligibilitySchemaVersion,
             &REFUND_ELIGIBILITY_SCHEMA_VERSION_V1,
+        );
+        // Write upgrade-safe risk-flags governance schema version marker.
+        env.storage().instance().set(
+            &DataKey::RiskFlagsSchemaVersion,
+            &RISK_FLAGS_SCHEMA_VERSION_V1,
         );
 
         events::emit_bounty_initialized(
@@ -4009,6 +4031,208 @@ impl BountyEscrowContract {
     /// New typed refund-eligibility view with explicit semantics.
     pub fn get_refund_eligibility_view(env: Env, bounty_id: u64) -> RefundEligibilityView {
         Self::compute_refund_eligibility(&env, bounty_id)
+    }
+
+    // =========================================================================
+    // RISK FLAGS GOVERNANCE
+    // =========================================================================
+
+    /// Set (OR-in) risk flag bits on a bounty's metadata (admin only).
+    ///
+    /// # Invariants
+    /// - Only bits within [`RISK_FLAGS_VALID_MASK`] are accepted; any reserved
+    ///   bits cause `InvalidRiskFlags`.
+    /// - Emits [`RiskFlagsUpdated`] after the new value is persisted (CEI).
+    /// - Metadata is created with all-zero flags if it does not yet exist.
+    ///
+    /// # Security
+    /// - Admin-only; `require_auth` is called on the stored admin address.
+    /// - Flags are informational on-chain; enforcement belongs to off-chain services.
+    pub fn set_escrow_risk_flags(
+        env: Env,
+        bounty_id: u64,
+        flags: u32,
+    ) -> Result<EscrowMetadata, Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        // Reject reserved bits.
+        if flags & !RISK_FLAGS_VALID_MASK != 0 {
+            return Err(Error::InvalidRiskFlags);
+        }
+
+        let mut meta: EscrowMetadata = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Metadata(bounty_id))
+            .unwrap_or(EscrowMetadata {
+                repo_id: 0,
+                issue_id: 0,
+                bounty_type: soroban_sdk::String::from_str(&env, ""),
+                risk_flags: 0,
+                notification_prefs: 0,
+                reference_hash: None,
+            });
+
+        let previous_flags = meta.risk_flags;
+        meta.risk_flags |= flags;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Metadata(bounty_id), &meta);
+
+        // Emit audit event after storage write (CEI ordering).
+        emit_risk_flags_updated(
+            &env,
+            RiskFlagsUpdated {
+                version: EVENT_VERSION_V2,
+                bounty_id,
+                previous_flags,
+                new_flags: meta.risk_flags,
+                admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(meta)
+    }
+
+    /// Clear (AND-NOT) risk flag bits on a bounty's metadata (admin only).
+    ///
+    /// # Invariants
+    /// - Only bits within [`RISK_FLAGS_VALID_MASK`] are accepted; any reserved
+    ///   bits cause `InvalidRiskFlags`.
+    /// - Emits [`RiskFlagsUpdated`] after the new value is persisted (CEI).
+    /// - Idempotent: clearing already-cleared bits is a no-op (no error).
+    ///
+    /// # Security
+    /// - Admin-only; `require_auth` is called on the stored admin address.
+    pub fn clear_escrow_risk_flags(
+        env: Env,
+        bounty_id: u64,
+        flags: u32,
+    ) -> Result<EscrowMetadata, Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        // Reject reserved bits.
+        if flags & !RISK_FLAGS_VALID_MASK != 0 {
+            return Err(Error::InvalidRiskFlags);
+        }
+
+        let mut meta: EscrowMetadata = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Metadata(bounty_id))
+            .unwrap_or(EscrowMetadata {
+                repo_id: 0,
+                issue_id: 0,
+                bounty_type: soroban_sdk::String::from_str(&env, ""),
+                risk_flags: 0,
+                notification_prefs: 0,
+                reference_hash: None,
+            });
+
+        let previous_flags = meta.risk_flags;
+        meta.risk_flags &= !flags;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Metadata(bounty_id), &meta);
+
+        // Emit audit event after storage write (CEI ordering).
+        emit_risk_flags_updated(
+            &env,
+            RiskFlagsUpdated {
+                version: EVENT_VERSION_V2,
+                bounty_id,
+                previous_flags,
+                new_flags: meta.risk_flags,
+                admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(meta)
+    }
+
+    /// Get the metadata for a bounty. Returns a default (all-zero) record if
+    /// no metadata has been written yet.
+    pub fn get_metadata(env: Env, bounty_id: u64) -> EscrowMetadata {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Metadata(bounty_id))
+            .unwrap_or(EscrowMetadata {
+                repo_id: 0,
+                issue_id: 0,
+                bounty_type: soroban_sdk::String::from_str(&env, ""),
+                risk_flags: 0,
+                notification_prefs: 0,
+                reference_hash: None,
+            })
+    }
+
+    /// Update the metadata fields for a bounty (admin only).
+    ///
+    /// Risk flags are preserved from the existing record; use
+    /// `set_escrow_risk_flags` / `clear_escrow_risk_flags` to modify them.
+    pub fn update_metadata(
+        env: Env,
+        _admin: Address,
+        bounty_id: u64,
+        repo_id: u64,
+        issue_id: u64,
+        bounty_type: soroban_sdk::String,
+        reference_hash: Option<soroban_sdk::Bytes>,
+    ) -> Result<EscrowMetadata, Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        let existing: EscrowMetadata = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Metadata(bounty_id))
+            .unwrap_or(EscrowMetadata {
+                repo_id: 0,
+                issue_id: 0,
+                bounty_type: soroban_sdk::String::from_str(&env, ""),
+                risk_flags: 0,
+                notification_prefs: 0,
+                reference_hash: None,
+            });
+
+        let updated = EscrowMetadata {
+            repo_id,
+            issue_id,
+            bounty_type,
+            risk_flags: existing.risk_flags, // preserve flags
+            notification_prefs: existing.notification_prefs,
+            reference_hash,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Metadata(bounty_id), &updated);
+
+        Ok(updated)
+    }
+
+    /// Return the risk-flags governance storage schema version written during `init`.
+    /// Returns `0` on legacy deployments where the marker was never written.
+    pub fn get_risk_flags_schema_version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::RiskFlagsSchemaVersion)
+            .unwrap_or(0u32)
     }
 
     /// Approve a refund before deadline (admin only).

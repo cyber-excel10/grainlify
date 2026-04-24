@@ -461,3 +461,244 @@ fn test_partially_refunded_to_released_fails() {
 
     setup.escrow.release_funds(&bounty_id, &setup.contributor);
 }
+
+// ============================================================================
+// RISK FLAGS GOVERNANCE TESTS (Issue #36)
+// ============================================================================
+//
+// These tests verify the risk-flags governance invariants:
+//   - set_escrow_risk_flags ORs bits into the stored flags
+//   - clear_escrow_risk_flags ANDs-NOT bits from the stored flags
+//   - Reserved bits outside RISK_FLAGS_VALID_MASK are rejected
+//   - RiskFlagsUpdated audit event is emitted on every change
+//   - Upgrade-safe schema version is written on init
+//   - update_metadata preserves existing risk flags
+//   - get_metadata returns default (zero) when no metadata exists
+
+/// RF-1: set_escrow_risk_flags ORs bits into stored flags.
+#[test]
+fn test_risk_flags_set_ors_bits() {
+    let setup = TestSetup::new();
+    let bounty_id = 200u64;
+
+    let meta = setup
+        .escrow
+        .set_escrow_risk_flags(&bounty_id, &RISK_FLAG_HIGH_RISK)
+        .unwrap();
+    assert_eq!(meta.risk_flags, RISK_FLAG_HIGH_RISK);
+
+    let meta2 = setup
+        .escrow
+        .set_escrow_risk_flags(&bounty_id, &RISK_FLAG_UNDER_REVIEW)
+        .unwrap();
+    assert_eq!(
+        meta2.risk_flags,
+        RISK_FLAG_HIGH_RISK | RISK_FLAG_UNDER_REVIEW
+    );
+}
+
+/// RF-2: clear_escrow_risk_flags ANDs-NOT bits from stored flags.
+#[test]
+fn test_risk_flags_clear_removes_bits() {
+    let setup = TestSetup::new();
+    let bounty_id = 201u64;
+    let all = RISK_FLAG_HIGH_RISK | RISK_FLAG_UNDER_REVIEW | RISK_FLAG_RESTRICTED;
+
+    setup.escrow.set_escrow_risk_flags(&bounty_id, &all).unwrap();
+    let meta = setup
+        .escrow
+        .clear_escrow_risk_flags(&bounty_id, &RISK_FLAG_UNDER_REVIEW)
+        .unwrap();
+    assert_eq!(meta.risk_flags, RISK_FLAG_HIGH_RISK | RISK_FLAG_RESTRICTED);
+}
+
+/// RF-3: clear is idempotent — clearing already-cleared bits is a no-op.
+#[test]
+fn test_risk_flags_clear_idempotent() {
+    let setup = TestSetup::new();
+    let bounty_id = 202u64;
+
+    setup
+        .escrow
+        .set_escrow_risk_flags(&bounty_id, &RISK_FLAG_HIGH_RISK)
+        .unwrap();
+    // Clear a bit that was never set.
+    let meta = setup
+        .escrow
+        .clear_escrow_risk_flags(&bounty_id, &RISK_FLAG_UNDER_REVIEW)
+        .unwrap();
+    assert_eq!(meta.risk_flags, RISK_FLAG_HIGH_RISK);
+}
+
+/// RF-4: all valid bits can be set and cleared together.
+#[test]
+fn test_risk_flags_all_valid_bits_round_trip() {
+    let setup = TestSetup::new();
+    let bounty_id = 203u64;
+    let all = RISK_FLAG_HIGH_RISK | RISK_FLAG_UNDER_REVIEW | RISK_FLAG_RESTRICTED | RISK_FLAG_DEPRECATED;
+
+    setup.escrow.set_escrow_risk_flags(&bounty_id, &all).unwrap();
+    assert_eq!(setup.escrow.get_metadata(&bounty_id).risk_flags, all);
+
+    setup.escrow.clear_escrow_risk_flags(&bounty_id, &all).unwrap();
+    assert_eq!(setup.escrow.get_metadata(&bounty_id).risk_flags, 0);
+}
+
+/// RF-5: reserved bits are rejected by set_escrow_risk_flags.
+#[test]
+fn test_risk_flags_reserved_bits_rejected_on_set() {
+    let setup = TestSetup::new();
+    let bounty_id = 204u64;
+    let reserved = 1u32 << 31; // not in RISK_FLAGS_VALID_MASK
+    let result = setup.escrow.try_set_escrow_risk_flags(&bounty_id, &reserved);
+    assert!(result.is_err(), "reserved bits must be rejected");
+}
+
+/// RF-6: reserved bits are rejected by clear_escrow_risk_flags.
+#[test]
+fn test_risk_flags_reserved_bits_rejected_on_clear() {
+    let setup = TestSetup::new();
+    let bounty_id = 205u64;
+    let reserved = 1u32 << 16;
+    let result = setup.escrow.try_clear_escrow_risk_flags(&bounty_id, &reserved);
+    assert!(result.is_err(), "reserved bits must be rejected on clear");
+}
+
+/// RF-7: RiskFlagsUpdated audit event is emitted on set.
+#[test]
+fn test_risk_flags_set_emits_audit_event() {
+    let setup = TestSetup::new();
+    let bounty_id = 206u64;
+    let before = setup.env.events().all().len();
+    setup
+        .escrow
+        .set_escrow_risk_flags(&bounty_id, &RISK_FLAG_HIGH_RISK)
+        .unwrap();
+    assert!(
+        setup.env.events().all().len() > before,
+        "RiskFlagsUpdated must be emitted on set"
+    );
+}
+
+/// RF-8: RiskFlagsUpdated audit event is emitted on clear.
+#[test]
+fn test_risk_flags_clear_emits_audit_event() {
+    let setup = TestSetup::new();
+    let bounty_id = 207u64;
+    setup
+        .escrow
+        .set_escrow_risk_flags(&bounty_id, &RISK_FLAG_HIGH_RISK)
+        .unwrap();
+    let before = setup.env.events().all().len();
+    setup
+        .escrow
+        .clear_escrow_risk_flags(&bounty_id, &RISK_FLAG_HIGH_RISK)
+        .unwrap();
+    assert!(
+        setup.env.events().all().len() > before,
+        "RiskFlagsUpdated must be emitted on clear"
+    );
+}
+
+/// RF-9: upgrade-safe schema version is written on init.
+#[test]
+fn test_risk_flags_schema_version_written_on_init() {
+    let setup = TestSetup::new();
+    let version = setup.escrow.get_risk_flags_schema_version();
+    assert_eq!(version, 1u32, "schema version must be 1 after init");
+}
+
+/// RF-10: get_metadata returns default (zero flags) when no metadata exists.
+#[test]
+fn test_risk_flags_get_metadata_default_is_zero() {
+    let setup = TestSetup::new();
+    let meta = setup.escrow.get_metadata(&999u64);
+    assert_eq!(meta.risk_flags, 0, "default risk_flags must be 0");
+}
+
+/// RF-11: update_metadata preserves existing risk flags.
+#[test]
+fn test_risk_flags_preserved_across_metadata_update() {
+    let setup = TestSetup::new();
+    let bounty_id = 208u64;
+
+    setup
+        .escrow
+        .set_escrow_risk_flags(&bounty_id, &(RISK_FLAG_HIGH_RISK | RISK_FLAG_RESTRICTED))
+        .unwrap();
+
+    setup
+        .escrow
+        .update_metadata(
+            &setup.admin,
+            &bounty_id,
+            &42u64,
+            &100u64,
+            &soroban_sdk::String::from_str(&setup.env, "bug_fix"),
+            &None,
+        )
+        .unwrap();
+
+    let meta = setup.escrow.get_metadata(&bounty_id);
+    assert_eq!(
+        meta.risk_flags,
+        RISK_FLAG_HIGH_RISK | RISK_FLAG_RESTRICTED,
+        "risk flags must survive metadata update"
+    );
+    assert_eq!(meta.repo_id, 42u64);
+    assert_eq!(meta.issue_id, 100u64);
+}
+
+/// RF-12: set_escrow_risk_flags requires contract to be initialized.
+#[test]
+fn test_risk_flags_requires_init() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, BountyEscrowContract);
+    let client = BountyEscrowContractClient::new(&env, &contract_id);
+    let result = client.try_set_escrow_risk_flags(&1u64, &RISK_FLAG_HIGH_RISK);
+    assert!(result.is_err(), "must fail when not initialized");
+}
+
+/// RF-13: multiple set calls accumulate flags correctly.
+#[test]
+fn test_risk_flags_multiple_sets_accumulate() {
+    let setup = TestSetup::new();
+    let bounty_id = 209u64;
+
+    setup
+        .escrow
+        .set_escrow_risk_flags(&bounty_id, &RISK_FLAG_HIGH_RISK)
+        .unwrap();
+    setup
+        .escrow
+        .set_escrow_risk_flags(&bounty_id, &RISK_FLAG_RESTRICTED)
+        .unwrap();
+    setup
+        .escrow
+        .set_escrow_risk_flags(&bounty_id, &RISK_FLAG_DEPRECATED)
+        .unwrap();
+
+    let meta = setup.escrow.get_metadata(&bounty_id);
+    assert_eq!(
+        meta.risk_flags,
+        RISK_FLAG_HIGH_RISK | RISK_FLAG_RESTRICTED | RISK_FLAG_DEPRECATED
+    );
+}
+
+/// RF-14: zero flags value is accepted (no-op set).
+#[test]
+fn test_risk_flags_zero_value_accepted() {
+    let setup = TestSetup::new();
+    let bounty_id = 210u64;
+    setup
+        .escrow
+        .set_escrow_risk_flags(&bounty_id, &RISK_FLAG_HIGH_RISK)
+        .unwrap();
+    // Setting zero is a no-op but must not error.
+    let meta = setup
+        .escrow
+        .set_escrow_risk_flags(&bounty_id, &0u32)
+        .unwrap();
+    assert_eq!(meta.risk_flags, RISK_FLAG_HIGH_RISK);
+}
