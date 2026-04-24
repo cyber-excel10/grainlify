@@ -233,10 +233,15 @@ fn test_build_info_event_with_different_admins() {
         let build_info_events: Vec<_> = events
             .iter()
             .filter(|event| {
-                let topics = &event.1;
-                topics.len() >= 1 && {
-                    let t0: Option<Symbol> = topics.get(0).and_then(|v| v.try_into_val(&env).ok());
-                    t0 == Some(soroban_sdk::symbol_short!("init"))
+                // Filter by this specific contract instance so accumulated
+                // events from prior loop iterations don't cause a mismatch.
+                event.0 == id && {
+                    let topics = &event.1;
+                    topics.len() >= 1 && {
+                        let t0: Option<Symbol> =
+                            topics.get(0).and_then(|v| v.try_into_val(&env).ok());
+                        t0 == Some(soroban_sdk::symbol_short!("init"))
+                    }
                 }
             })
             .collect();
