@@ -1,9 +1,9 @@
 {
   "$schema": "./contract-manifest-schema.json",
   "contract_name": "BountyEscrowContract",
-  "contract_purpose": "Manages bounty escrow with multi-token support, capability-based authorization, two-step admin rotation with timelock, refund-eligibility views, fee configuration, and comprehensive security features including reentrancy protection and rate limiting",
+  "contract_purpose": "Manages bounty escrow with multi-token support, capability-based authorization, two-step admin rotation with timelock, refund-eligibility views, fee configuration, participant filter pagination with audit events, and comprehensive security features including reentrancy protection and rate limiting",
   "version": {
-    "current": "2.1.1",
+    "current": "2.4.0",
     "schema": "1.0.0",
     "history": [
       {
@@ -44,16 +44,27 @@
           "Added upgrade-safe storage keys for maintenance mode metadata and schema versioning"
         ]
       },
-      {
+       {
         "version": "2.3.0",
         "release_date": "2026-04-23",
         "changes": [
           "Added FeeRoutingInvariantChecked audit event — emitted after every fee routing operation to prove distributed_total == fee_amount",
           "Added FeeRoutingSchemaVersionSet event — emitted once during init() for upgrade-safe schema versioning",
           "Added reason field to MaintenanceModeChangedV2 for complete audit trail",
-          "Added InvalidBatchSizeCap error code for batch size governance",
+          "Added InvalidBatchSize error code for batch size governance",
           "Added BatchSizeCaps and FeeRoutingSchemaVersion DataKey variants for upgrade-safe storage",
           "Fee routing invariant is now enforced on-chain: last destination absorbs rounding remainder ensuring exact accounting"
+        ]
+      },
+      {
+        "version": "2.4.0",
+        "release_date": "2026-04-23",
+        "changes": [
+          "query_whitelist and query_blocklist now return ParticipantListPage with items, total, offset, and has_more fields for clear pagination semantics",
+          "Added get_whitelist_count and get_blocklist_count view functions for O(1) total-count queries",
+          "Added ParticipantFilterQueried audit event emitted on every query_whitelist/query_blocklist call for off-chain audit trails",
+          "Limit argument silently capped at MAX_PARTICIPANT_FILTER_PAGE_SIZE (50) to bound per-call ledger cost",
+          "Added ParticipantListSchemaVersion storage key initialized on contract init for upgrade-safe storage versioning"
         ]
       }
     ]
@@ -346,8 +357,32 @@
         "gas_estimate": "low"
       },
       {
+        "name": "get_whitelist_count",
+        "description": "Return total number of allowlisted addresses",
+        "parameters": [],
+        "returns": {
+          "type": "u32",
+          "description": "Total count of allowlisted addresses"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_blocklist_count",
+        "description": "Return total number of blocklisted addresses",
+        "parameters": [],
+        "returns": {
+          "type": "u32",
+          "description": "Total count of blocklisted addresses"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
         "name": "query_whitelist",
-        "description": "Get paginated allowlist participants",
+        "description": "Get paginated allowlist participants with total count and has_more metadata. Limit silently capped at 50.",
         "parameters": [
           {
             "name": "offset",
@@ -357,12 +392,12 @@
           {
             "name": "limit",
             "type": "u32",
-            "description": "Maximum number of results"
+            "description": "Maximum number of results (capped at 50)"
           }
         ],
         "returns": {
-          "type": "Vec<Address>",
-          "description": "Allowlisted participant addresses"
+          "type": "ParticipantListPage",
+          "description": "Page of allowlisted addresses with items, total, offset, and has_more fields"
         },
         "authorization": "any",
         "pausable": false,
@@ -370,7 +405,7 @@
       },
       {
         "name": "query_blocklist",
-        "description": "Get paginated blocklist participants",
+        "description": "Get paginated blocklist participants with total count and has_more metadata. Limit silently capped at 50.",
         "parameters": [
           {
             "name": "offset",
@@ -380,12 +415,12 @@
           {
             "name": "limit",
             "type": "u32",
-            "description": "Maximum number of results"
+            "description": "Maximum number of results (capped at 50)"
           }
         ],
         "returns": {
-          "type": "Vec<Address>",
-          "description": "Blocklisted participant addresses"
+          "type": "ParticipantListPage",
+          "description": "Page of blocklisted addresses with items, total, offset, and has_more fields"
         },
         "authorization": "any",
         "pausable": false,
@@ -591,13 +626,39 @@
         "pausable": false,
         "gas_estimate": "low"
       },
-      {
+       {
         "name": "is_maintenance_mode",
         "description": "Check if maintenance mode is active",
         "parameters": [],
         "returns": {
           "type": "bool",
           "description": "True if maintenance mode is enabled, false otherwise"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_high_value_config",
+        "description": "Get the current high-value release timelock configuration",
+        "parameters": [],
+        "returns": {
+          "type": "Option<HighValueConfig>",
+          "description": "Threshold and duration, or None if not configured"
+        },
+        "authorization": "any",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "get_queued_release",
+        "description": "Get the pending queued release for a bounty, if any",
+        "parameters": [
+          { "name": "bounty_id", "type": "u64", "description": "Bounty identifier" }
+        ],
+        "returns": {
+          "type": "Option<QueuedRelease>",
+          "description": "Queued release record or None"
         },
         "authorization": "any",
         "pausable": false,
@@ -818,9 +879,9 @@
         "pausable": false,
         "gas_estimate": "high"
       },
-      {
+       {
         "name": "update_risk_flags",
-        "description": "Updates the risk flags for a specific bounty",
+        "description": "Updates the risk flags for a specific bounty (replaces entire bitmask)",
         "parameters": [
           {
             "name": "bounty_id",
@@ -836,6 +897,96 @@
         "returns": {
           "type": "()",
           "description": "Empty on success"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "set_escrow_risk_flags",
+        "description": "Sets specific risk flag bits using OR operation (granular governance)",
+        "parameters": [
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          },
+          {
+            "name": "flags_to_set",
+            "type": "u32",
+            "description": "Bitmask of flags to set (OR operation)"
+          }
+        ],
+        "returns": {
+          "type": "EscrowMetadata",
+          "description": "Updated metadata with new risk flags"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "clear_escrow_risk_flags",
+        "description": "Clears specific risk flag bits using AND NOT operation (granular governance)",
+        "parameters": [
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          },
+          {
+            "name": "flags_to_clear",
+            "type": "u32",
+            "description": "Bitmask of flags to clear (AND NOT operation)"
+          }
+        ],
+        "returns": {
+          "type": "EscrowMetadata",
+          "description": "Updated metadata with cleared risk flags"
+        },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
+      },
+      {
+        "name": "update_metadata",
+        "description": "Updates metadata fields for a bounty with validation",
+        "parameters": [
+          {
+            "name": "admin",
+            "type": "Address",
+            "description": "Admin address (must be authorized)"
+          },
+          {
+            "name": "bounty_id",
+            "type": "u64",
+            "description": "Bounty identifier"
+          },
+          {
+            "name": "repo_id",
+            "type": "u64",
+            "description": "Repository ID"
+          },
+          {
+            "name": "issue_id",
+            "type": "u64",
+            "description": "Issue ID"
+          },
+          {
+            "name": "bounty_type",
+            "type": "String",
+            "description": "Bounty type tag (1-50 characters)"
+          },
+          {
+            "name": "reference_hash",
+            "type": "Option<Bytes>",
+            "description": "Optional reference hash for the bounty",
+            "optional": true
+          }
+        ],
+        "returns": {
+          "type": "EscrowMetadata",
+          "description": "Updated metadata"
         },
         "authorization": "admin",
         "pausable": false,
@@ -876,9 +1027,49 @@
         "authorization": "admin",
         "pausable": false,
         "gas_estimate": "low"
+      },
+      {
+        "name": "set_batch_size_caps",
+        "description": "Set independent runtime caps for batch_lock_funds and batch_release_funds. Both caps must satisfy 1 <= cap <= MAX_BATCH_SIZE (20). Emits BatchSizeCapsUpdated.",
+        "parameters": [
+          {
+            "name": "lock_cap",
+            "type": "u32",
+            "description": "Maximum items allowed in a single batch_lock_funds call (1..=20)"
+          },
+          {
+            "name": "release_cap",
+            "type": "u32",
+            "description": "Maximum items allowed in a single batch_release_funds call (1..=20)"
+          }
+        ],
+        "returns": { "type": "()", "description": "Empty on success" },
+        "authorization": "admin",
+        "pausable": false,
+        "gas_estimate": "low"
       }
     ]
   },
+  "view_entrypoints_fee_routing": [
+    {
+      "name": "get_fee_routing",
+      "description": "Return the per-bounty fee routing override for bounty_id, or None when no override is set.",
+      "parameters": [
+        {
+          "name": "bounty_id",
+          "type": "u64",
+          "description": "Bounty identifier"
+        }
+      ],
+      "returns": {
+        "type": "Option<PerBountyFeeRouting>",
+        "description": "Per-bounty routing config, or None if using global routing."
+      },
+      "authorization": "any",
+      "pausable": false,
+      "gas_estimate": "low"
+    }
+  ],
   "configuration": {
     "parameters": [
       {
@@ -951,6 +1142,14 @@
         "description": "Delay in seconds before a pending admin can accept a rotation",
         "constraints": "3600 <= value <= 2592000",
         "admin_only": true
+      },
+      {
+        "name": "MAX_PARTICIPANT_FILTER_PAGE_SIZE",
+        "type": "u32",
+        "default_value": "50",
+        "description": "Hard upper bound on addresses returned per query_whitelist / query_blocklist call. Callers passing a larger limit are silently capped.",
+        "constraints": "value = 50",
+        "admin_only": false
       }
     ],
     "storage_keys": [
@@ -1049,6 +1248,12 @@
         "type": "instance",
         "description": "Paginated index of blocklisted addresses",
         "data_structure": "Vec<Address>"
+      },
+      {
+        "name": "ParticipantListSchemaVersion",
+        "type": "instance",
+        "description": "Upgrade-safe marker for participant list (whitelist/blocklist) storage semantics. Initialized to 1 during init().",
+        "data_structure": "u32"
       }
     ]
   },
@@ -1415,7 +1620,7 @@
         ],
         "trigger": "Successful refund call with admin approval record"
       },
-      {
+       {
         "name": "MaintenanceModeChangedV2",
         "description": "Maintenance mode toggled with previous state (audit-friendly)",
         "data": [
@@ -1441,6 +1646,43 @@
           }
         ],
         "trigger": "Admin toggles maintenance mode (state change only)"
+      },
+      {
+        "name": "ParticipantFilterQueried",
+        "description": "Emitted on every query_whitelist / query_blocklist call for off-chain audit trails",
+        "data": [
+          {
+            "name": "list_type",
+            "type": "ParticipantFilterListType",
+            "description": "Which list was queried (Allowlist or Blocklist)"
+          },
+          {
+            "name": "offset",
+            "type": "u32",
+            "description": "Zero-based start index used in this query"
+          },
+          {
+            "name": "limit",
+            "type": "u32",
+            "description": "Effective limit after applying MAX_PARTICIPANT_FILTER_PAGE_SIZE cap"
+          },
+          {
+            "name": "result_count",
+            "type": "u32",
+            "description": "Number of addresses returned in this page"
+          },
+          {
+            "name": "total",
+            "type": "u32",
+            "description": "Total number of addresses in the list at query time"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64",
+            "description": "Ledger timestamp"
+          }
+        ],
+        "trigger": "Every call to query_whitelist or query_blocklist"
       }
     ]
   },
@@ -1582,7 +1824,8 @@
         "test_metadata_tagging.rs",
         "test_partial_payout_rounding.rs",
         "test_gas.rs",
-        "test_analytics_monitoring.rs"
+        "test_analytics_monitoring.rs",
+        "test_filter_pagination.rs"
       ]
     },
     "test_scenarios": [

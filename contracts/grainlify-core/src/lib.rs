@@ -99,6 +99,29 @@ pub struct ReadOnlyModeEvent {
     pub timestamp: u64,
 }
 
+/// Emitted during contract initialization to record build and deployment information.
+///
+/// This event provides crucial metadata for auditing and monitoring contract deployments:
+/// - Allows indexers and monitoring systems to track contract initialization events
+/// - Records the initial admin address for access control auditing
+/// - Captures the exact ledger timestamp for event sequencing
+/// - Enables verification of deployment order and timing across networks
+///
+/// # Security Considerations
+/// - Event is emitted during `init_admin` which requires the admin's authorization
+/// - Provides transparent audit trail for deployment activities
+/// - Should be indexed by off-chain monitoring systems for initialization verification
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BuildInfoEvent {
+    /// The admin address that authorized contract initialization
+    pub admin: Address,
+    /// Initial contract version set during initialization
+    pub version: u32,
+    /// Ledger timestamp when the contract was initialized
+    pub timestamp: u64,
+}
+
 /// Point-in-time snapshot of core configuration.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -669,6 +692,10 @@ mod test_storage_layout;
 mod test_version_helpers;
 #[cfg(test)]
 mod test_strict_mode;
+#[cfg(test)]
+mod build_info_event_tests {
+    include!("test/build_info_event_tests.rs");
+}
 
 // ==================== END MONITORING MODULE ====================
 
@@ -688,6 +715,16 @@ impl GrainlifyContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Version, &VERSION);
         env.storage().instance().set(&DataKey::ReadOnlyMode, &false);
+        
+        // Emit BuildInfo event for initialization tracking and auditing
+        env.events().publish(
+            (symbol_short!("init"), symbol_short!("build")),
+            BuildInfoEvent {
+                admin: admin.clone(),
+                version: VERSION,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
     }
 
     // ========================================================================

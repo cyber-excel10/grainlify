@@ -517,6 +517,29 @@
     ],
     "events": [
       {
+        "name": "ContractInitialized",
+        "description": "Contract initialization completed with BuildInfo metadata",
+        "data": [
+          {
+            "name": "admin",
+            "type": "Address",
+            "description": "Administrator address that authorized initialization"
+          },
+          {
+            "name": "version",
+            "type": "u32",
+            "description": "Initial contract version"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64",
+            "description": "Initialization timestamp (ledger time)"
+          }
+        ],
+        "trigger": "Contract initialization via init_admin()",
+        "security_notes": "Only emitted during first-time initialization; requires admin authorization"
+      },
+      {
         "name": "ContractUpgraded",
         "description": "Contract successfully upgraded",
         "data": [

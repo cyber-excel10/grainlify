@@ -34,7 +34,7 @@ fn setup_program(
         &None,
         &None,
     );
-    client.publish_program();
+    client.publish_program(&program_id);
 
     if initial_amount > 0 {
         token_admin_client.mint(&client.address, &initial_amount);
@@ -2753,6 +2753,238 @@ fn test_spend_limit_negative_threshold_rejected() {
     let (client, _admin, _token_client, _token_admin) = setup_program(&env, 0);
     let program_id = client.get_program_info().program_id;
     client.set_program_spend_threshold(&program_id, &-1);
+}
+
+// ============================================================================
+// PER-WINDOW SPENDING LIMITS — Issue #25
+// ============================================================================
+// Tests for time-windowed spend limits: set/get config, enforcement in
+// single_payout, batch_payout, schedule releases, window reset, and events.
+
+/// SW-1: No limit set → payouts proceed without restriction.
+#[test]
+fn test_spending_window_no_limit_allows_payout() {
+    let env = Env::default();
+    let (client, _admin, token_client, _token_admin) = setup_program(&env, 10_000);
+    let recipient = Address::generate(&env);
+
+    client.single_payout(&recipient, &10_000);
+    assert_eq!(token_client.balance(&recipient), 10_000);
+}
+
+/// SW-2: Limit disabled (enabled=false) → payouts proceed even if amount > max_amount.
+#[test]
+fn test_spending_window_disabled_limit_allows_payout() {
+    let env = Env::default();
+    let (client, _admin, token_client, _token_admin) = setup_program(&env, 10_000);
+    let program_id = client.get_program_info().program_id;
+    let recipient = Address::generate(&env);
+
+    client.set_program_spending_limit(&program_id, &86400u64, &100i128, &false);
+    client.single_payout(&recipient, &10_000);
+    assert_eq!(token_client.balance(&recipient), 10_000);
+}
+
+/// SW-3: single_payout within window limit succeeds.
+#[test]
+fn test_spending_window_single_payout_within_limit_succeeds() {
+    let env = Env::default();
+    let (client, _admin, token_client, _token_admin) = setup_program(&env, 10_000);
+    let program_id = client.get_program_info().program_id;
+    let recipient = Address::generate(&env);
+
+    client.set_program_spending_limit(&program_id, &86400u64, &5_000i128, &true);
+    client.single_payout(&recipient, &5_000);
+    assert_eq!(token_client.balance(&recipient), 5_000);
+}
+
+/// SW-4: single_payout exceeding window limit is rejected.
+#[test]
+#[should_panic(expected = "Program spending limit exceeded for current window")]
+fn test_spending_window_single_payout_exceeds_limit_rejected() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 10_000);
+    let program_id = client.get_program_info().program_id;
+    let recipient = Address::generate(&env);
+
+    client.set_program_spending_limit(&program_id, &86400u64, &3_000i128, &true);
+    client.single_payout(&recipient, &3_001);
+}
+
+/// SW-5: Cumulative payouts within window are tracked; second payout that
+///        would push total over limit is rejected.
+#[test]
+#[should_panic(expected = "Program spending limit exceeded for current window")]
+fn test_spending_window_cumulative_limit_enforced() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 10_000);
+    let program_id = client.get_program_info().program_id;
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    // Window limit = 5_000; first payout = 3_000 (ok), second = 3_000 (total 6_000 > 5_000)
+    client.set_program_spending_limit(&program_id, &86400u64, &5_000i128, &true);
+    client.single_payout(&r1, &3_000);
+    client.single_payout(&r2, &3_000); // must panic
+}
+
+/// SW-6: batch_payout total within window limit succeeds.
+#[test]
+fn test_spending_window_batch_payout_within_limit_succeeds() {
+    let env = Env::default();
+    let (client, _admin, token_client, _token_admin) = setup_program(&env, 10_000);
+    let program_id = client.get_program_info().program_id;
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    client.set_program_spending_limit(&program_id, &86400u64, &6_000i128, &true);
+    client.batch_payout(
+        &soroban_sdk::vec![&env, r1.clone(), r2.clone()],
+        &soroban_sdk::vec![&env, 2_000i128, 3_000i128],
+    );
+    assert_eq!(token_client.balance(&r1), 2_000);
+    assert_eq!(token_client.balance(&r2), 3_000);
+}
+
+/// SW-7: batch_payout total exceeding window limit is rejected.
+#[test]
+#[should_panic(expected = "Program spending limit exceeded for current window")]
+fn test_spending_window_batch_payout_exceeds_limit_rejected() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 10_000);
+    let program_id = client.get_program_info().program_id;
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    client.set_program_spending_limit(&program_id, &86400u64, &4_000i128, &true);
+    client.batch_payout(
+        &soroban_sdk::vec![&env, r1, r2],
+        &soroban_sdk::vec![&env, 2_000i128, 3_000i128], // total 5_000 > 4_000
+    );
+}
+
+/// SW-8: Window resets after window_size seconds; new window allows full limit again.
+#[test]
+fn test_spending_window_resets_after_window_expires() {
+    let env = Env::default();
+    let (client, _admin, token_client, _token_admin) = setup_program(&env, 20_000);
+    let program_id = client.get_program_info().program_id;
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    // Short window of 100 seconds, limit 5_000
+    client.set_program_spending_limit(&program_id, &100u64, &5_000i128, &true);
+
+    // Exhaust the window
+    client.single_payout(&r1, &5_000);
+    assert_eq!(token_client.balance(&r1), 5_000);
+
+    // Advance time past the window
+    env.ledger().with_mut(|l| l.timestamp += 101);
+
+    // New window: same limit available again
+    client.single_payout(&r2, &5_000);
+    assert_eq!(token_client.balance(&r2), 5_000);
+}
+
+/// SW-9: get_program_spending_limit returns None when not set.
+#[test]
+fn test_spending_window_get_limit_none_when_not_set() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 0);
+    let program_id = client.get_program_info().program_id;
+
+    let limit = client.get_program_spending_limit(&program_id);
+    assert!(limit.is_none(), "limit must be None when not configured");
+}
+
+/// SW-10: get_program_spending_state returns None before any payout.
+#[test]
+fn test_spending_window_get_state_none_before_payout() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 0);
+    let program_id = client.get_program_info().program_id;
+
+    client.set_program_spending_limit(&program_id, &86400u64, &5_000i128, &true);
+    let state = client.get_program_spending_state(&program_id);
+    assert!(state.is_none(), "state must be None before any payout");
+}
+
+/// SW-11: get_program_spending_state reflects cumulative amount after payouts.
+#[test]
+fn test_spending_window_state_tracks_cumulative_amount() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 10_000);
+    let program_id = client.get_program_info().program_id;
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    client.set_program_spending_limit(&program_id, &86400u64, &10_000i128, &true);
+    client.single_payout(&r1, &2_000);
+    client.single_payout(&r2, &3_000);
+
+    let state = client.get_program_spending_state(&program_id).unwrap();
+    assert_eq!(state.amount_released, 5_000);
+}
+
+/// SW-12: zero window_size is rejected.
+#[test]
+#[should_panic(expected = "window_size must be greater than zero")]
+fn test_spending_window_zero_window_size_rejected() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 0);
+    let program_id = client.get_program_info().program_id;
+    client.set_program_spending_limit(&program_id, &0u64, &5_000i128, &true);
+}
+
+/// SW-13: negative max_amount is rejected.
+#[test]
+#[should_panic(expected = "max_amount must be non-negative")]
+fn test_spending_window_negative_max_amount_rejected() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 0);
+    let program_id = client.get_program_info().program_id;
+    client.set_program_spending_limit(&program_id, &86400u64, &-1i128, &true);
+}
+
+/// SW-14: Rejection emits the (limit, prog_spend) event.
+#[test]
+fn test_spending_window_rejection_emits_event() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 10_000);
+    let program_id = client.get_program_info().program_id;
+    let recipient = Address::generate(&env);
+
+    client.set_program_spending_limit(&program_id, &86400u64, &1_000i128, &true);
+
+    let events_before = env.events().all().len();
+    let result = client.try_single_payout(&recipient, &5_000);
+    assert!(result.is_err(), "over-limit payout must fail");
+
+    let events_after = env.events().all();
+    assert!(
+        events_after.len() > events_before,
+        "rejection event must be emitted"
+    );
+}
+
+/// SW-15: Limit can be updated; new value takes effect immediately.
+#[test]
+fn test_spending_window_limit_update_takes_effect() {
+    let env = Env::default();
+    let (client, _admin, token_client, _token_admin) = setup_program(&env, 20_000);
+    let program_id = client.get_program_info().program_id;
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    client.set_program_spending_limit(&program_id, &86400u64, &3_000i128, &true);
+    client.single_payout(&r1, &3_000);
+    assert_eq!(token_client.balance(&r1), 3_000);
+
+    // Raise limit
+    client.set_program_spending_limit(&program_id, &86400u64, &20_000i128, &true);
+    client.single_payout(&r2, &10_000);
+    assert_eq!(token_client.balance(&r2), 10_000);
 }
 
 // ============================================================================
