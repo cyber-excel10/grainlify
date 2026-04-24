@@ -1,21 +1,21 @@
-//! # BuildInfo Event Tests
-//!
-//! Comprehensive tests for the `BuildInfo` event emission during contract initialization.
-//!
-//! ## Test Coverage
-//! - BuildInfo event emission on init_admin
-//! - Event field validation (admin, version, timestamp)
-//! - Single initialization guarantee (AlreadyInitialized error)
-//! - Authorization requirement verification
-//! - Event topic and structure validation
-//! - Timestamp accuracy and sequence
-//! - Edge cases and boundary conditions
-//!
-//! ## Security Considerations
-//! - BuildInfo event provides audit trail for initialization
-//! - Event requires admin authorization to be emitted
-//! - Event data is immutable once emitted
-//! - Prevents double-initialization via AlreadyInitialized error
+// # BuildInfo Event Tests
+//
+// Comprehensive tests for the `BuildInfo` event emission during contract initialization.
+//
+// ## Test Coverage
+// - BuildInfo event emission on init_admin
+// - Event field validation (admin, version, timestamp)
+// - Single initialization guarantee (AlreadyInitialized error)
+// - Authorization requirement verification
+// - Event topic and structure validation
+// - Timestamp accuracy and sequence
+// - Edge cases and boundary conditions
+//
+// ## Security Considerations
+// - BuildInfo event provides audit trail for initialization
+// - Event requires admin authorization to be emitted
+// - Event data is immutable once emitted
+// - Prevents double-initialization via AlreadyInitialized error
 
 extern crate std;
 
