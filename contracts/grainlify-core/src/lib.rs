@@ -1446,6 +1446,184 @@ impl GrainlifyContract {
             None
         }
     }
+
+    // ========================================================================
+    // Multisig Initialization
+    // ========================================================================
+
+    /// Initialize with multisig governance (alternative to init_admin).
+    /// Requires at least one signer and a valid threshold.
+    pub fn init(env: Env, signers: Vec<Address>, threshold: u32) {
+        if env.storage().instance().has(&DataKey::Version) {
+            panic!("Already initialized");
+        }
+        MultiSig::init(&env, signers, threshold);
+        env.storage().instance().set(&DataKey::Version, &VERSION);
+        env.storage().instance().set(&DataKey::ReadOnlyMode, &false);
+    }
+
+    /// Initialize with admin, chain_id, and network_id (network-aware init).
+    pub fn init_with_network(env: Env, admin: Address, chain_id: String, network_id: String) {
+        if env.storage().instance().has(&DataKey::Version) {
+            panic!("Already initialized");
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Version, &VERSION);
+        env.storage().instance().set(&DataKey::ReadOnlyMode, &false);
+        env.storage().instance().set(&DataKey::ChainId, &chain_id);
+        env.storage().instance().set(&DataKey::NetworkId, &network_id);
+    }
+
+    /// Initialize with governance configuration.
+    pub fn init_governance(env: Env, admin: Address, config: GovernanceConfig) {
+        if env.storage().instance().has(&DataKey::Version) {
+            panic!("Already initialized");
+        }
+        admin.require_auth();
+        if config.quorum_percentage == 0 || config.quorum_percentage > 10000 {
+            panic!("Invalid quorum percentage");
+        }
+        if config.approval_threshold < 5000 || config.approval_threshold > 10000 {
+            panic!("Invalid approval threshold");
+        }
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Version, &VERSION);
+        env.storage().instance().set(&DataKey::ReadOnlyMode, &false);
+        env.storage().instance().set(&governance::GOVERNANCE_CONFIG, &config);
+        env.storage().instance().set(&governance::PROPOSAL_COUNT, &0u32);
+    }
+
+    // ========================================================================
+    // Multisig Upgrade Proposal Flow
+    // ========================================================================
+
+    /// Propose a WASM upgrade via multisig. Returns the stable proposal ID.
+    /// `expiry` is a ledger timestamp after which the proposal cannot be approved
+    /// or executed (0 = no expiry).
+    pub fn propose_upgrade(env: Env, proposer: Address, wasm_hash: BytesN<32>, expiry: u64) -> u64 {
+        Self::require_not_paused(&env);
+        Self::require_not_read_only(&env);
+        let proposal_id = MultiSig::propose(&env, proposer.clone(), expiry);
+        env.storage().instance().set(&DataKey::UpgradeProposal(proposal_id), &wasm_hash);
+        env.storage().instance().set(&DataKey::UpgradeProposalProposer(proposal_id), &proposer);
+        proposal_id
+    }
+
+    /// Approve a pending upgrade proposal. Starts the timelock when threshold is met.
+    pub fn approve_upgrade(env: Env, proposal_id: u64, signer: Address) {
+        Self::require_not_paused(&env);
+        MultiSig::approve(&env, proposal_id, signer);
+        // Start timelock if threshold is now met and not already started
+        if MultiSig::can_execute(&env, proposal_id)
+            && !env.storage().instance().has(&DataKey::UpgradeTimelock(proposal_id))
+        {
+            let now = env.ledger().timestamp();
+            env.storage().instance().set(&DataKey::UpgradeTimelock(proposal_id), &now);
+            env.events().publish(
+                (Symbol::new(&env, "timelock"), Symbol::new(&env, "started")),
+                (proposal_id, now),
+            );
+        }
+    }
+
+    /// Cancel a pending upgrade proposal. Any signer may cancel.
+    pub fn cancel_upgrade(env: Env, proposal_id: u64, canceller: Address) {
+        MultiSig::cancel(&env, proposal_id, canceller);
+        env.storage().instance().remove(&DataKey::UpgradeTimelock(proposal_id));
+    }
+
+    /// Return the upgrade proposal record for a given proposal ID, or None.
+    pub fn get_upgrade_proposal(env: Env, proposal_id: u64) -> Option<UpgradeProposalRecord> {
+        Self::load_upgrade_proposal(&env, proposal_id)
+    }
+
+    // ========================================================================
+    // Migration
+    // ========================================================================
+
+    /// Pre-commit a migration hash for replay protection.
+    /// Must be called before `migrate()` with the same target_version and hash.
+    pub fn commit_migration(env: Env, target_version: u32, hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("{}", ContractError::NotInitialized as u32));
+        admin.require_auth();
+        Self::require_not_read_only(&env);
+        let commitment = MigrationCommitment {
+            target_version,
+            hash,
+            committed_at: env.ledger().timestamp(),
+            expires_at: 0,
+        };
+        env.storage().instance().set(&DataKey::MigrationCommitment(target_version), &commitment);
+        env.events().publish(
+            (symbol_short!("migrate"), symbol_short!("commit")),
+            (target_version, env.ledger().timestamp()),
+        );
+    }
+
+    /// Execute a state migration to `target_version`.
+    ///
+    /// Requires a prior `commit_migration` call with the same hash (replay protection).
+    /// Idempotent: migrating to the same version twice is a no-op after the first call.
+    pub fn migrate(env: Env, target_version: u32, migration_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("{}", ContractError::NotInitialized as u32));
+        admin.require_auth();
+        Self::require_not_read_only(&env);
+
+        // Idempotency: skip if already migrated to this version
+        if let Some(state) = env.storage().instance().get::<_, MigrationState>(&DataKey::MigrationState) {
+            if state.to_version == target_version {
+                return;
+            }
+        }
+
+        // [FIX-C01] Verify commitment exists and hash matches
+        let commitment: MigrationCommitment = env.storage().instance()
+            .get(&DataKey::MigrationCommitment(target_version))
+            .unwrap_or_else(|| panic!("{}", ContractError::MigrationCommitmentNotFound as u32));
+
+        if commitment.hash != migration_hash {
+            panic!("{}", ContractError::MigrationHashMismatch as u32);
+        }
+
+        let current_version: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(1);
+
+        // Run version-specific migration logic
+        if current_version == 1 && target_version == 2 {
+            migrate_v1_to_v2(&env);
+        }
+
+        let state = MigrationState {
+            from_version: current_version,
+            to_version: target_version,
+            migrated_at: env.ledger().timestamp(),
+            migration_hash: migration_hash.clone(),
+        };
+        env.storage().instance().set(&DataKey::MigrationState, &state);
+        env.storage().instance().set(&DataKey::Version, &target_version);
+
+        // Consume commitment (replay protection)
+        env.storage().instance().remove(&DataKey::MigrationCommitment(target_version));
+
+        env.events().publish(
+            (symbol_short!("migrate"), symbol_short!("done")),
+            (current_version, target_version, env.ledger().timestamp()),
+        );
+
+        monitoring::track_operation(&env, symbol_short!("migrate"), admin, true);
+    }
+
+    // ========================================================================
+    // Internal helpers
+    // ========================================================================
+
+    fn require_not_paused(env: &Env) {
+        if MultiSig::is_contract_paused(env) {
+            panic!("Contract is paused");
+        }
+    }
 }
 
 // ============================================================================
