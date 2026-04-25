@@ -145,6 +145,9 @@ use soroban_sdk::{
 };
 use soroban_sdk::xdr::ToXdr;
 
+mod errors;
+pub use errors::BatchPayoutError;
+
 // Event types
 const PROGRAM_INITIALIZED: Symbol = symbol_short!("PrgInit");
 const FUNDS_LOCKED: Symbol = symbol_short!("FndsLock");
@@ -3716,9 +3719,13 @@ impl ProgramEscrowContract {
         // 1b. Idempotency check
         // 2. Contract initialized
         // 3. Paused (operational state)
+        // 3b. Dispute guard
         // 4. Authorization
-        // 6. Business logic (sufficient balance)
-        // 7. Circuit breaker check
+        // 5. Input validation (length, empty, zero amounts, duplicates)
+        // 6. Compute total atomically (overflow check)
+        // 7. Business logic (spend threshold, balance)
+        // 8. Circuit breaker check
+        // 9. Execute transfers
 
         // 1. Reentrancy guard
         reentrancy_guard::check_not_entered(&env);
@@ -3734,34 +3741,27 @@ impl ProgramEscrowContract {
         }
 
         // 2. Contract must be initialized
-        let program_data: ProgramData =
-            env.storage()
-                .instance()
-                .get(&PROGRAM_DATA)
-                .unwrap_or_else(|| {
-                    reentrancy_guard::clear_entered(&env);
-                    panic!("Program not initialized")
-                });
+        let program_data: ProgramData = match env.storage().instance().get(&PROGRAM_DATA) {
+            Some(d) => d,
+            None => bail!(BatchPayoutError::NotInitialized),
+        };
 
         // 3. Operational state: paused
         if Self::check_paused(&env, symbol_short!("release")) {
-            reentrancy_guard::clear_entered(&env);
-            panic!("Funds Paused");
+            bail!(BatchPayoutError::Paused);
         }
 
         // 3b. Dispute guard — payouts blocked while a dispute is open
         if Self::dispute_state(&env) == DisputeState::Open {
-            reentrancy_guard::clear_entered(&env);
-            panic!("Payout blocked: dispute open");
+            bail!(BatchPayoutError::DisputeOpen);
         }
 
         // 4. Authorization
         Self::authorize_release_actor(&env, &program_data, caller.as_ref());
 
-        // 5. Input validation
+        // 5a. Length / empty checks
         if recipients.len() != amounts.len() {
-            reentrancy_guard::clear_entered(&env);
-            panic!("Recipients and amounts vectors must have the same length");
+            bail!(BatchPayoutError::LengthMismatch);
         }
 
         // 5a. Idempotency key validation (deterministic behavior)
@@ -3769,21 +3769,33 @@ impl ProgramEscrowContract {
         // Note: We need to calculate total_payout first for idempotency validation
 
         if recipients.len() == 0 {
-            reentrancy_guard::clear_entered(&env);
-            panic!("Cannot process empty batch");
+            bail!(BatchPayoutError::EmptyBatch);
         }
 
-        // Calculate total payout amount
+        // 5b. Pre-validate every entry: zero amounts and duplicate recipients.
+        //     Both checks run over the full list before any transfer so the
+        //     batch is truly atomic — no partial state on failure.
+        for i in 0..amounts.len() {
+            if amounts.get(i).unwrap() <= 0 {
+                bail!(BatchPayoutError::ZeroAmount);
+            }
+        }
+        // Duplicate-recipient check (O(n²) — acceptable for MAX_BATCH_SIZE ≤ 100)
+        for i in 0..recipients.len() {
+            for j in (i + 1)..recipients.len() {
+                if recipients.get(i).unwrap() == recipients.get(j).unwrap() {
+                    bail!(BatchPayoutError::DuplicateRecipient);
+                }
+            }
+        }
+
+        // 6. Compute total atomically — overflow is a hard error.
         let mut total_payout: i128 = 0;
         for amount in amounts.iter() {
-            if amount <= 0 {
-                reentrancy_guard::clear_entered(&env);
-                panic!("All amounts must be greater than zero");
-            }
-            total_payout = total_payout.checked_add(amount).unwrap_or_else(|| {
-                reentrancy_guard::clear_entered(&env);
-                panic!("Payout amount overflow")
-            });
+            total_payout = match total_payout.checked_add(amount) {
+                Some(v) => v,
+                None => bail!(BatchPayoutError::AmountOverflow),
+            };
         }
 
         // 5b. Idempotency key validation (now that we have total_payout)
@@ -3814,29 +3826,27 @@ impl ProgramEscrowContract {
         // Deterministic error ordering: spend threshold check runs before
         // balance/circuit checks, so clients observe stable failures.
         if Self::enforce_spend_threshold(&env, &program_data.program_id, total_payout).is_err() {
-            reentrancy_guard::clear_entered(&env);
-            panic!("Spend threshold exceeded");
+            bail!(BatchPayoutError::SpendLimitExceeded);
         }
 
         // Per-window spending limit check (after per-payout threshold, before balance)
         Self::enforce_spending_window(&env, &program_data.program_id, total_payout);
 
         if total_payout > program_data.remaining_balance {
-            reentrancy_guard::clear_entered(&env);
-            panic!("Insufficient balance");
+            bail!(BatchPayoutError::InsufficientBalance);
         }
 
-        // 7. Circuit breaker check
+        // 8. Circuit breaker check
         if let Err(err_code) = error_recovery::check_and_allow_with_thresholds(&env) {
             reentrancy_guard::clear_entered(&env);
             if err_code == error_recovery::ERR_CIRCUIT_OPEN {
-                panic!("Circuit breaker is OPEN");
+                return Err(BatchPayoutError::CircuitBreakerOpen);
             } else {
-                panic!("Operation rejected by circuit breaker");
+                return Err(BatchPayoutError::CircuitBreakerOpen);
             }
         }
 
-        // Execute transfers
+        // 9. Execute transfers — all pre-validation passed; this section must not fail.
         let mut updated_history = program_data.payout_history.clone();
         let timestamp = env.ledger().timestamp();
         let contract_address = env.current_contract_address();
@@ -3853,11 +3863,10 @@ impl ProgramEscrowContract {
                 cfg.payout_fixed_fee,
                 cfg.fee_enabled,
             );
-            let net = gross.checked_sub(pay_fee).unwrap_or(0);
-            if net <= 0 {
-                reentrancy_guard::clear_entered(&env);
-                panic!("Payout fee consumes entire payout");
-            }
+            let net = match gross.checked_sub(pay_fee) {
+                Some(v) if v > 0 => v,
+                _ => bail!(BatchPayoutError::FeeConsumesAmount),
+            };
 
             if pay_fee > 0 {
                 token_client.transfer(&contract_address, &cfg.fee_recipient, &pay_fee);
@@ -3877,12 +3886,11 @@ impl ProgramEscrowContract {
             threshold_monitor::record_operation_success(&env);
             threshold_monitor::record_outflow(&env, gross);
 
-            let payout_record = PayoutRecord {
+            updated_history.push_back(PayoutRecord {
                 recipient,
                 amount: net,
                 timestamp,
-            };
-            updated_history.push_back(payout_record);
+            });
         }
 
         // Update program data
@@ -3890,7 +3898,6 @@ impl ProgramEscrowContract {
         updated_data.remaining_balance -= total_payout;
         updated_data.payout_history = updated_history;
 
-        // Store updated data
         env.storage().instance().set(&PROGRAM_DATA, &updated_data);
 
         // Store idempotency record if key was provided
@@ -3927,8 +3934,16 @@ impl ProgramEscrowContract {
 
         // Clear reentrancy guard before returning
         reentrancy_guard::clear_entered(&env);
+        Ok(updated_data)
+    }
 
-        updated_data
+    /// Returns the batch payout storage schema version written during `init_program`.
+    /// Returns `0` on legacy deployments where the marker was never written.
+    pub fn get_batch_payout_schema_version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::BatchPayoutSchemaVersion)
+            .unwrap_or(0u32)
     }
 
     /// Execute a single payout to one winner.

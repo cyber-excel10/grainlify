@@ -238,6 +238,29 @@
         "gas_estimate": "high"
       },
       {
+        "name": "try_batch_payout",
+        "description": "Typed batch payout — returns Result<ProgramData, BatchPayoutError> instead of panicking. All pre-validation (zero amounts, duplicates, overflow) runs before any token transfer.",
+        "parameters": [
+          {
+            "name": "recipients",
+            "type": "Vec<Address>",
+            "description": "Array of recipient addresses (must be unique)"
+          },
+          {
+            "name": "amounts",
+            "type": "Vec<i128>",
+            "description": "Corresponding payout amounts (all must be > 0)"
+          }
+        ],
+        "returns": {
+          "type": "Result<ProgramData, BatchPayoutError>",
+          "description": "Updated program data on success, typed error on failure"
+        },
+        "authorization": "admin",
+        "pausable": true,
+        "gas_estimate": "high"
+      },
+      {
         "name": "single_payout",
         "description": "Distribute prize to single winner with optional idempotency key for retry safety",
         "parameters": [
@@ -1272,6 +1295,12 @@
         "name": "DataKey::SpendLimitSchemaVersion",
         "type": "instance",
         "description": "Upgrade-safe version marker for spend-limit threshold storage layout. Increment when MultisigConfig schema changes.",
+        "data_structure": "u32"
+      },
+      {
+        "name": "DataKey::BatchPayoutSchemaVersion",
+        "type": "instance",
+        "description": "Upgrade-safe version marker for batch payout logic. Written at init with value BATCH_PAYOUT_SCHEMA_VERSION_V1=1. Returns 0 on legacy pre-v1 contracts.",
         "data_structure": "u32"
       },
       {
