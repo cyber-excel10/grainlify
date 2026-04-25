@@ -5246,6 +5246,7 @@ impl BountyEscrowContract {
     }
 
     /// New typed refund-eligibility view with explicit semantics.
+    /// Implements issue #1040: Add refund eligibility view with clear semantics.
     pub fn get_refund_eligibility_view(env: Env, bounty_id: u64) -> RefundEligibilityView {
         Self::compute_refund_eligibility(&env, bounty_id)
     }
